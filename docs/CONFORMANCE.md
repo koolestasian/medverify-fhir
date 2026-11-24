@@ -7,7 +7,7 @@ has its own gate in `cargo test` (crates/medverify-core/tests/pas.rs). The suite
 over TLS signed by a sandbox test CA. Passing Inferno is a conformance signal for these pinned
 builds, not a certification.
 
-Overall verdict: **pass**. Run finished 20261124T005448Z (UTC). Detailed reports: `artifacts/inferno/20261124T005448Z/`.
+Overall verdict: **pass**. Run finished 20261124T193218Z (UTC). Detailed reports: `artifacts/inferno/20261124T192000Z/`.
 
 A suite passes only when every test and group has a known verdict that is pass, omit (does not
 apply), or a skip of something the kit marks optional. A missing or unknown verdict, failure,
@@ -17,10 +17,10 @@ error, cancellation, timeout, unresolved wait or required skip fails it.
 
 | Item | Value |
 |---|---|
-| Base commit | a9369792e20b00ace3e2924ebc9c86cee48a0da4 |
-| Working tree | uncommitted changes present |
-| Files | 64 |
-| Content digest | e433ff9f7905e45d9425b6176b3a7a29931d408d879932b101fbec8b18c81b02 |
+| Base commit | 777ec8e13cb28e34be1352d5001e7b6c8215561c |
+| Working tree | clean |
+| Files | 92 |
+| Content digest | faacba2cecb955895f7bc333c3ce24b6862a0aa90b4b19f1a883c70d69161ebd |
 
 ## Results
 
@@ -48,23 +48,23 @@ error, cancellation, timeout, unresolved wait or required skip fails it.
 
 | Step | Seconds |
 |---|---|
-| Seed: synthea | 25.2 |
-| Seed: upload | 17.9 |
-| Seed: fingerprint | 9.6 |
-| Reset cycle 1 | 44.8 |
-| Reset cycle 2 | 34.9 |
-| CRD group 1 | 3.0 |
-| CRD group 3 | 133.0 |
-| CRD group 2 | 3.1 |
-| CRD group 4 | 3.1 |
-| DTR group 1 | 99.5 |
+| Seed: synthea | 26.6 |
+| Seed: upload | 28.4 |
+| Seed: fingerprint | 7.7 |
+| Reset cycle 1 | 28.8 |
+| Reset cycle 2 | 26.5 |
+| CRD group 1 | 9.1 |
+| CRD group 3 | 184.8 |
+| CRD group 2 | 3.0 |
+| CRD group 4 | 3.0 |
+| DTR group 1 | 175.0 |
 | DTR group 2 | 3.1 |
-| DTR group 3 | 12.2 |
+| DTR group 3 | 9.3 |
 | DTR group 4 | 3.0 |
-| PAS group 1 | 9.1 |
-| PAS group 2 | 18.1 |
-| PAS group 3 | 51.3 |
-| PAS group 4 | 3.1 |
+| PAS group 1 | 201.8 |
+| PAS group 2 | 27.2 |
+| PAS group 3 | 21.1 |
+| PAS group 4 | 3.0 |
 
 ## Hardware
 
