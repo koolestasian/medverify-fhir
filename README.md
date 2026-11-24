@@ -1,12 +1,14 @@
 # MedVerify-FHIR
 
-MedVerify-FHIR checks Medicare coding edits, Washington WISeR policy, and Da Vinci Prior Authorization Support (PAS) transactions. The Rust core provides all three checks. The typed Python API exposes the Medicare coding edit evaluators and is tested on CPython 3.14 and free-threaded 3.14t.
+MedVerify-FHIR checks Medicare coding edits, Washington WISeR policy, and Da Vinci Prior Authorization Support (PAS) transactions. All three are available in Rust and through the typed Python API, which is tested on CPython 3.14 and free-threaded 3.14t.
 
 - **NCCI** evaluates procedure-to-procedure (PTP) and medically unlikely edits (MUE) against immutable indexes. The included dataset has 120 synthetic procedures.
 - **Washington WISeR** checks prior authorization and pre-payment review routing, epidural injection and cervical fusion criteria, tracking numbers, and provider exemptions. The bundled policy uses synthetic procedure mappings. Load an authorized table for actual codes with `wiser::Policy::from_toml`. [Bundled policy](policy/wa_wiser.toml)
 - **Da Vinci PAS 2.2.1** validates FHIR R4 request and response Bundles, internal references, line decisions, and subscription notifications. The Rust core also evaluates CMS-0057-F deadlines and dated reviewer requirements for Arizona, California, Maryland, Texas, and Washington. [Reviewer rules](policy/state_hitl.toml)
 
 ## Quickstart
+
+After installing the wheel, run `medverify demo` from any directory. It runs four synthetic checks offline, verifies a repaired control for each, and prints the measured check times.
 
 From the repository root, use stable Rust with a native linker, CPython 3.11 or later, and uv installed as a Python module. Run these commands in Bash, or Git Bash on Windows, to build the synthetic indexes and check one line against its unit limit.
 
@@ -32,6 +34,12 @@ MAI 1 applies the unit limit to each line. Pass `claim_id` when the claim is kno
 The evaluator reports `unsupported_split` for an unsupported additional line on a known claim and `possible_unsupported_split` when an unsupported line may be part of a split and its claim ID is unknown. Both are coding-review findings. A line over its own unit limit receives a separate `claim_line` finding.
 
 Rust callers can open the generated files with `MmapPtpIndex::open` and `MmapMueIndex::open` and pass `claim::ClaimLine` records to `ncci::evaluate` and `mue::evaluate`. `write_ptp` produces format version 2, which adds a directory of column-one codes so a lookup searches only that code's rows. Version 1 PTP files still open.
+
+## Python policy API
+
+`medverify.wiser.Policy.washington_synthetic()` loads the bundled Washington policy. Use `Policy.from_toml(text)` with authorized procedure mappings. Pass typed service and stage dictionaries to `policy.route`. The same policy exposes gold-card thresholds, eligibility, and associated denials. The module also provides `evaluate_esi`, `evaluate_fusion`, and `validate_utn`.
+
+`medverify.fhir_pas.validate_request(document)` takes FHIR R4 JSON text and returns an owned request handle. Pass that handle to `validate_response(document, request)` to correlate a response. A validation failure raises `ValueError` with its PAS validation code. Use `Timeline` for receipt and notice deadlines and `ReviewerPolicy.state_rules()` for state reviewer requirements. Give `Timeline` a zoned receipt such as `2026-03-06T09:00:00-08:00[America/Los_Angeles]` so it can apply local calendar deadlines across DST changes.
 
 ## Licensed CMS tables
 

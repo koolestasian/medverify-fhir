@@ -1,9 +1,9 @@
 use super::{Action, RequestItem};
 use jiff::civil::{date, Date};
 use jiff::{Timestamp, Zoned};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Plan {
     OriginalMedicare,
@@ -20,19 +20,22 @@ pub enum Plan {
     Other,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ServiceKind {
     Medical,
     Drug,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Priority {
     Standard,
     Expedited,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TimingScope {
     Applies,
     DrugExcluded,
@@ -41,7 +44,8 @@ pub enum TimingScope {
     UnclassifiedService,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Payer {
     pub plan: Plan,
     /// Start of the rating period in effect at receipt for Medicaid or CHIP managed care.
@@ -87,7 +91,8 @@ impl Payer {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExtensionReason {
     EnrolleeRequested,
     ProviderRequested,
@@ -99,20 +104,23 @@ pub enum ExtensionReason {
     MaExtraordinaryCircumstancesInEnrolleeInterest,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExtensionNotice {
     pub sent_at: Timestamp,
     pub written_reason: bool,
     pub grievance_rights: Option<GrievanceRights>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GrievanceRights {
     Standard,
     Expedited,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Extension {
     pub calendar_days: u8,
     pub reason: ExtensionReason,
@@ -172,7 +180,8 @@ pub enum TimingError {
     DateOverflow,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Timeliness {
     OutsideScope(TimingScope),
     OnTime { deadline: Timestamp },
@@ -181,7 +190,8 @@ pub enum Timeliness {
     Overdue { deadline: Timestamp },
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CommunicatedAction {
     pub action: Action,
     /// Actual time of notice, as recorded by the transport or workflow.
@@ -295,7 +305,7 @@ impl Timeline<'_> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Decision {
     Approval,
@@ -304,7 +314,7 @@ pub enum Decision {
     Delay,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Basis {
     MedicalNecessity,
@@ -312,7 +322,7 @@ pub enum Basis {
     Administrative,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Qualification {
     LicensedCompetentClinician,
@@ -320,7 +330,7 @@ pub enum Qualification {
     MedicalDirector,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewerRule {
     pub state: String,
@@ -371,14 +381,16 @@ pub struct ReviewContext<'a> {
     pub specialty: Specialty,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Specialty {
     Medical,
     MentalHealthOrSubstanceUse,
     Dental,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Automation {
     NoneOrAdministrativeSupport,
     /// Automation made part of the clinical determination.
@@ -386,14 +398,16 @@ pub enum Automation {
     SoleDecisionMaker,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Profession {
     Physician,
     Dentist,
     OtherClinician,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReviewerEvidence {
     pub profession: Profession,
     pub licensed_and_in_scope: bool,

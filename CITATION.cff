@@ -3,7 +3,9 @@ message: "Please cite MedVerify-FHIR if you use this software."
 title: "MedVerify-FHIR"
 type: software
 authors:
+  - family-names: Pham
+    given-names: "Khanh (Kevin)"
   - name: "MedVerify-FHIR contributors"
-version: 0.1.0
+version: 0.2.0
 license: Apache-2.0
 repository-code: "https://github.com/koolestasian/medverify-fhir"

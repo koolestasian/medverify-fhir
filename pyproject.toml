@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "medverify-fhir"
-version = "0.1.0"
+version = "0.2.0"
 description = "Deterministic verification for medical claims and FHIR prior authorization"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,6 +12,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 
 [project.scripts]
+medverify = "medverify._demo:main"
 medverify-ingest = "medverify.ingest:main"
 
 [dependency-groups]

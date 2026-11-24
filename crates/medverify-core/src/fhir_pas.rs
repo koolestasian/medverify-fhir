@@ -3,7 +3,9 @@
 mod policy;
 pub use policy::*;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use time::format_description::well_known::Rfc3339;
@@ -448,19 +450,63 @@ impl RequestItem<'_> {
 }
 
 pub struct Request<'a> {
-    claim: Entry<'a>,
-    bundle: Bundle<'a>,
-    items: BTreeMap<u32, RequestItem<'a>>,
+    claim_url: Cow<'a, str>,
+    claim: Cow<'a, Value>,
+    patient: Party<'a>,
+    insurer: Party<'a>,
+    items: BTreeMap<u32, Cow<'a, Value>>,
     priority: Priority,
 }
 
+struct Party<'a> {
+    url: Cow<'a, str>,
+    id: Cow<'a, Value>,
+}
+
+impl<'a> Party<'a> {
+    fn from_entry(entry: Entry<'a>) -> Self {
+        Self {
+            url: Cow::Borrowed(entry.url),
+            id: Cow::Borrowed(&entry.resource["id"]),
+        }
+    }
+
+    fn into_owned(self) -> Party<'static> {
+        Party {
+            url: Cow::Owned(self.url.into_owned()),
+            id: Cow::Owned(self.id.into_owned()),
+        }
+    }
+}
+
 impl<'a> Request<'a> {
-    pub fn items(&self) -> impl Iterator<Item = RequestItem<'a>> + '_ {
-        self.items.values().copied()
+    pub fn items(&self) -> impl Iterator<Item = RequestItem<'_>> + '_ {
+        self.items
+            .iter()
+            .map(|(&sequence, product_or_service)| RequestItem {
+                sequence,
+                product_or_service,
+            })
     }
 
     pub fn priority(&self) -> Priority {
         self.priority
+    }
+
+    /// Retain the validated request data needed for response correlation and item classification.
+    pub fn into_owned(self) -> Request<'static> {
+        Request {
+            claim_url: Cow::Owned(self.claim_url.into_owned()),
+            claim: Cow::Owned(self.claim.into_owned()),
+            patient: self.patient.into_owned(),
+            insurer: self.insurer.into_owned(),
+            items: self
+                .items
+                .into_iter()
+                .map(|(sequence, item)| (sequence, Cow::Owned(item.into_owned())))
+                .collect(),
+            priority: self.priority,
+        }
     }
 }
 
@@ -640,13 +686,7 @@ pub fn validate_request(value: &Value) -> Result<Request<'_>, Error> {
             }
         }
         if items
-            .insert(
-                sequence,
-                RequestItem {
-                    sequence,
-                    product_or_service,
-                },
-            )
+            .insert(sequence, Cow::Borrowed(product_or_service))
             .is_some()
         {
             return Err(Error::ItemCorrelation);
@@ -673,8 +713,10 @@ pub fn validate_request(value: &Value) -> Result<Request<'_>, Error> {
         )?;
     }
     Ok(Request {
-        claim,
-        bundle,
+        claim_url: Cow::Borrowed(claim.url),
+        claim: Cow::Borrowed(claim.resource),
+        patient: Party::from_entry(patient_entry),
+        insurer: Party::from_entry(insurer),
         items,
         priority,
     })
@@ -780,7 +822,8 @@ fn certification_is(value: &Value, code: &str) -> Result<bool, Error> {
     )
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Action {
     Approved,
     Denied,
@@ -831,17 +874,14 @@ fn approval_number(response: &Value, review: &Value) -> Result<(), Error> {
 }
 
 fn same_party(
-    request: &Request<'_>,
+    prior: &Party<'_>,
     response: &Bundle<'_>,
     entry: Entry<'_>,
     key: &str,
     kind: &str,
 ) -> Result<(), Error> {
-    let prior = request
-        .bundle
-        .target(request.claim, &request.claim.resource[key], kind)?;
     let current = response.target(entry, &entry.resource[key], kind)?;
-    if prior.url != current.url || prior.resource["id"] != current.resource["id"] {
+    if prior.url != current.url || *prior.id != current.resource["id"] {
         return Err(Error::ClaimCorrelation);
     }
     Ok(())
@@ -858,7 +898,7 @@ fn claim_matches(request: &Request<'_>, entry: Entry<'_>, bundle: &Bundle<'_>) -
         return false;
     }
     let identifier_matches = identifier(&reference["identifier"]).is_some_and(|target| {
-        list(&request.claim.resource["identifier"])
+        list(&request.claim["identifier"])
             .iter()
             .any(|prior| identifier(prior) == Some(target))
     });
@@ -868,11 +908,11 @@ fn claim_matches(request: &Request<'_>, entry: Entry<'_>, bundle: &Bundle<'_>) -
     if let Some(url) = reference.get("reference") {
         return required_text(url).is_some_and(|url| {
             if let Some(found) = bundle.resolve(entry, url) {
-                return found.url == request.claim.url && found.resource == request.claim.resource;
+                return found.url == request.claim_url && found.resource == request.claim.as_ref();
             }
-            let absolute_match = url == request.claim.url;
+            let absolute_match = url == request.claim_url;
             let relative_match = rest_identity(entry.url)
-                .zip(rest_identity(request.claim.url))
+                .zip(rest_identity(&request.claim_url))
                 .is_some_and(|((from, _, _), (to, kind, id))| {
                     from == to && kind == "Claim" && url.strip_prefix("Claim/") == Some(id)
                 });
@@ -930,8 +970,8 @@ pub fn validate_response(
     if !claim_matches(request, entry, &bundle) {
         return Err(Error::ClaimCorrelation);
     }
-    same_party(request, &bundle, entry, "patient", "Patient")?;
-    same_party(request, &bundle, entry, "insurer", "Organization")?;
+    same_party(&request.patient, &bundle, entry, "patient", "Patient")?;
+    same_party(&request.insurer, &bundle, entry, "insurer", "Organization")?;
     patient(
         bundle
             .target(entry, &response["patient"], "Patient")?
@@ -1176,7 +1216,8 @@ pub fn validate_subscription(value: &Value, sending_systems: &[&str]) -> Result<
     (!seen.is_empty()).then_some(()).ok_or(Error::Subscription)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Inquiry {
     Manual,
     AutomatedPolling,
