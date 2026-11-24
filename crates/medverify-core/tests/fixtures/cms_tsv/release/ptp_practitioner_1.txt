@@ -1,0 +1,6 @@
+Synthetic edit table for fixtures only CANARY-DESCRIPTOR-7Q
+Project-authored data, not a CMS release.
+Column 1	Column 2	* = In existence prior to 1996	Effective Date	Deletion Date *=no data	Modifier 0=not allowed 1=allowed 9=not applicable	PTP Edit Rationale
+Y9001	Y9002		20261001	*	1	CANARY-DESCRIPTOR-7Q synthetic rationale one
+Y9001	Y9003	*	20000101	20261231	0	CANARY-DESCRIPTOR-7Q synthetic rationale two
+Y9001	Y9004		20260301	20260301	9	CANARY-DESCRIPTOR-7Q synthetic rationale three

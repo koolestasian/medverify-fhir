@@ -1,0 +1,9 @@
+col1,col2,setting,effective,end_exclusive,ccmi,prior_1996
+Y9001,Y9002,practitioner,2026-10-01,,1,0
+Y9001,Y9003,practitioner,2000-01-01,2027-01-01,0,1
+Y9001,Y9004,practitioner,2026-03-01,2026-03-01,9,0
+Y9005,Y9006,practitioner,2026-07-01,2026-10-01,1,0
+Y9005,Y9006,practitioner,2026-10-01,,0,0
+Y9001,Y9002,hospital,2026-01-01,,0,0
+Y9007,Y9008,hospital,2010-01-01,2026-01-01,1,1
+Y9007,Y9008,hospital,2026-01-01,2026-01-01,9,0

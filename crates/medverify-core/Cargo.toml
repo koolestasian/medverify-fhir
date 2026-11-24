@@ -1,5 +1,6 @@
 [package]
 name = "medverify-core"
+description = "NCCI, WISeR and Da Vinci PAS verification core for MedVerify-FHIR"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

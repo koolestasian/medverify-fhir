@@ -8,6 +8,7 @@ use medverify_core::index::{MmapMueIndex, MmapPtpIndex};
 use medverify_core::{mue, ncci};
 use pyo3::exceptions::{PyOverflowError, PyValueError};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use std::io;
 use std::path::PathBuf;
 
@@ -18,22 +19,65 @@ struct MedVerifyEngine {
     mue: MmapMueIndex,
 }
 
-fn evaluation_error(error: EvaluationError<'_>) -> PyErr {
-    match error {
-        EvaluationError::DuplicateLineId { .. } => PyValueError::new_err(error.to_string()),
-        EvaluationError::UnitTotalOverflow { .. } => PyOverflowError::new_err(error.to_string()),
+/// Batches below this size run on the calling thread.
+const PARALLEL_BATCH: usize = 64;
+
+/// An evaluation failure reduced to plain data, so it can cross threads before becoming a `PyErr`.
+struct Failure {
+    overflow: bool,
+    message: String,
+}
+
+impl Failure {
+    fn new(error: EvaluationError<'_>) -> Self {
+        Self {
+            overflow: matches!(error, EvaluationError::UnitTotalOverflow { .. }),
+            message: error.to_string(),
+        }
+    }
+
+    fn into_err(self, prefix: Option<usize>) -> PyErr {
+        let message = match prefix {
+            Some(index) => format!("claims[{index}]: {}", self.message),
+            None => self.message,
+        };
+        if self.overflow {
+            PyOverflowError::new_err(message)
+        } else {
+            PyValueError::new_err(message)
+        }
     }
 }
 
 impl MedVerifyEngine {
-    fn findings(&self, claim: &[ClaimLine]) -> PyResult<Findings> {
+    fn findings_core(&self, claim: &[ClaimLine]) -> Result<Findings, Failure> {
         let lines: Vec<_> = claim.iter().map(ClaimLine::as_line).collect();
-        let ptp = ncci::evaluate(&self.ptp, &lines).map_err(evaluation_error)?;
-        let mue = mue::evaluate(&self.mue, &lines).map_err(evaluation_error)?;
+        let ptp = ncci::evaluate(&self.ptp, &lines).map_err(Failure::new)?;
+        let mue = mue::evaluate(&self.mue, &lines).map_err(Failure::new)?;
         Ok(Findings {
             ptp: ptp.into_iter().map(Into::into).collect(),
             mue: mue.into_iter().map(Into::into).collect(),
         })
+    }
+
+    /// Findings in input order, or the error of the lowest failing index.
+    fn batch(&self, claims: &[Vec<ClaimLine>]) -> Result<Vec<Findings>, (usize, Failure)> {
+        if claims.len() < PARALLEL_BATCH {
+            return claims
+                .iter()
+                .enumerate()
+                .map(|(index, lines)| self.findings_core(lines).map_err(|e| (index, e)))
+                .collect();
+        }
+        let results: Vec<_> = claims
+            .par_iter()
+            .map(|lines| self.findings_core(lines))
+            .collect();
+        results
+            .into_iter()
+            .enumerate()
+            .map(|(index, result)| result.map_err(|failure| (index, failure)))
+            .collect()
     }
 }
 
@@ -57,7 +101,8 @@ impl MedVerifyEngine {
 
     /// Evaluate all lines in one group of claims, including service-day totals.
     fn evaluate(&self, py: Python<'_>, lines: Vec<ClaimLine>) -> PyResult<Findings> {
-        py.detach(move || self.findings(&lines))
+        py.detach(move || self.findings_core(&lines))
+            .map_err(|failure| failure.into_err(None))
     }
 
     /// Evaluate independent groups of lines and return their findings in input order.
@@ -66,7 +111,8 @@ impl MedVerifyEngine {
         py: Python<'_>,
         claims: Vec<Vec<ClaimLine>>,
     ) -> PyResult<Vec<Findings>> {
-        py.detach(move || claims.iter().map(|lines| self.findings(lines)).collect())
+        py.detach(move || self.batch(&claims))
+            .map_err(|(index, failure)| failure.into_err(Some(index)))
     }
 }
 

@@ -35,6 +35,8 @@ impl ModifierEvidence {
             "separate_structure" => SeparateStructure,
             "non_overlapping_service" => NonOverlappingService,
             "distinct_service" => DistinctService,
+            "repeat_procedure_same_practitioner" => RepeatProcedureSamePractitioner,
+            "repeat_procedure_other_practitioner" => RepeatProcedureOtherPractitioner,
             _ => return Err(PyValueError::new_err("unknown modifier evidence basis")),
         };
         Ok(Self(claim::ModifierEvidence {
@@ -59,12 +61,13 @@ pub struct ClaimLine {
     modifiers: Vec<Modifier>,
     modifier_evidence: Vec<claim::ModifierEvidence>,
     abn_liability_shift_attempted: bool,
+    claim_id: Option<String>,
 }
 
 #[pymethods]
 impl ClaimLine {
     #[new]
-    #[pyo3(signature = (*, id, beneficiary, billing_provider, date, setting, code, units, service_kind="other", modifiers=None, modifier_evidence=None, abn_liability_shift_attempted=false))]
+    #[pyo3(signature = (*, id, beneficiary, billing_provider, date, setting, code, units, service_kind="other", modifiers=None, modifier_evidence=None, abn_liability_shift_attempted=false, claim_id=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         id: u64,
@@ -78,11 +81,15 @@ impl ClaimLine {
         modifiers: Option<Vec<String>>,
         modifier_evidence: Option<Vec<ModifierEvidence>>,
         abn_liability_shift_attempted: bool,
+        claim_id: Option<String>,
     ) -> PyResult<Self> {
         if beneficiary.trim().is_empty() || billing_provider.trim().is_empty() {
             return Err(PyValueError::new_err(
                 "beneficiary and billing_provider must be nonempty",
             ));
+        }
+        if claim_id.as_ref().is_some_and(|id| id.trim().is_empty()) {
+            return Err(PyValueError::new_err("claim_id must be nonempty"));
         }
         let date = Date::parse(date, format_description!("[year]-[month]-[day]"))
             .ok()
@@ -124,6 +131,7 @@ impl ClaimLine {
                 .map(|e| e.0)
                 .collect(),
             abn_liability_shift_attempted,
+            claim_id,
         })
     }
 }
@@ -144,6 +152,7 @@ impl ClaimLine {
             modifiers: &self.modifiers,
             modifier_evidence: &self.modifier_evidence,
             abn_liability_shift_attempted: self.abn_liability_shift_attempted,
+            claim_id: self.claim_id.as_deref(),
         }
     }
 }

@@ -1,5 +1,6 @@
 [package]
 name = "medverify-py"
+description = "Python bindings for the MedVerify-FHIR verification core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,4 +17,5 @@ extension-module = ["pyo3/extension-module"]
 [dependencies]
 medverify-core = { version = "=0.1.0", path = "../medverify-core" }
 pyo3 = "=0.30.1"
+rayon = "1.11"
 time = { version = "0.3", default-features = false, features = ["macros", "parsing"] }

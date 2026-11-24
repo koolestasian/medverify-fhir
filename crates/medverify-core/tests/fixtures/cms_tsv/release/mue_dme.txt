@@ -1,0 +1,4 @@
+Synthetic DME limits CANARY-DESCRIPTOR-7Q
+HCPCS/CPT Code	DMEPOS Services MUE Values	MUE Adjudication Indicator	MUE Rationale
+Y9015	7	1	CANARY-DESCRIPTOR-7Q synthetic rationale fourteen
+Y9011	1	3 Date of Service Edit: Clinical	CANARY-DESCRIPTOR-7Q synthetic rationale fifteen

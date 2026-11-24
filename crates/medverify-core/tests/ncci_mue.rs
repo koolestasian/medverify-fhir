@@ -51,6 +51,7 @@ fn line(id: u64, code: &str, units: u64) -> ClaimLine<'static> {
         modifiers: &[],
         modifier_evidence: &[],
         abn_liability_shift_attempted: false,
+        claim_id: None,
     }
 }
 
@@ -427,10 +428,13 @@ proptest! {
         let mut first = line(1, "Y9011", left);
         first.abn_liability_shift_attempted = abn;
         let findings = mue::evaluate(mue, &[first, line(2, "Y9011", right)]).unwrap();
-        let expected: Vec<_> = [(1, left, abn), (2, right, false)].into_iter()
+        // Every finding is compared. Each line is limited by its own units, and the second
+        // unmodified line without a known claim is also a possible split for review.
+        let mut expected: Vec<_> = [(1, left, abn), (2, right, false)].into_iter()
             .filter(|(_, units, _)| *units > 3)
             .map(|(line_id, units, abn)| (MueScope::ClaimLine { line_id }, units, abn))
             .collect();
+        expected.push((MueScope::PossibleUnsupportedSplit { line_id: 2 }, right, false));
         prop_assert_eq!(findings.into_iter()
             .map(|f| (f.scope, f.total_units, f.abn_cannot_shift_liability)).collect::<Vec<_>>(), expected);
     }

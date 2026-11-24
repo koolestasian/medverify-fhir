@@ -17,6 +17,8 @@ EvidenceBasis = Literal[
     "separate_structure",
     "non_overlapping_service",
     "distinct_service",
+    "repeat_procedure_same_practitioner",
+    "repeat_procedure_other_practitioner",
 ]
 
 
@@ -49,9 +51,14 @@ class MueFinding(TypedDict):
     service_day: ServiceDay
     code: str
     scope: Literal[
-        "claim_line", "absolute_service_day_limit", "service_day_clinical_review"
+        "claim_line",
+        "unsupported_split",
+        "possible_unsupported_split",
+        "absolute_service_day_limit",
+        "service_day_clinical_review",
     ]
     line_id: int | None
+    claim_id: str | None
     max_units: int
     total_units: int
     abn_cannot_shift_liability: bool

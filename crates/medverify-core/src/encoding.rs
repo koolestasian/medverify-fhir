@@ -70,7 +70,18 @@ pub struct MueRecord {
     pub reserved: u16,
 }
 
+/// One column-one bucket of a version 2 PTP index: `row_count` records from `first_row`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PtpDirectoryEntry {
+    pub col1_b36: u32,
+    pub first_row: u32,
+    pub row_count: u32,
+}
+
 const _: () = {
+    assert!(core::mem::size_of::<PtpDirectoryEntry>() == 12);
+    assert!(core::mem::align_of::<PtpDirectoryEntry>() == 4);
     assert!(core::mem::size_of::<NcciPtpRecord>() == 16);
     assert!(core::mem::align_of::<NcciPtpRecord>() == 4);
     assert!(core::mem::size_of::<MueRecord>() == 16);
@@ -138,6 +149,23 @@ mod tests {
         .concat();
         assert_eq!(bytes_of(&row), expected);
         assert_eq!(bytes_of(&NcciPtpRecord::zeroed()), &[0; 16]);
+    }
+
+    #[test]
+    fn ptp_directory_entry_layout() {
+        let entry = PtpDirectoryEntry {
+            col1_b36: 0x0403_0201,
+            first_row: 0x0807_0605,
+            row_count: 0x0c0b_0a09,
+        };
+        let expected = [
+            &entry.col1_b36.to_ne_bytes()[..],
+            &entry.first_row.to_ne_bytes(),
+            &entry.row_count.to_ne_bytes(),
+        ]
+        .concat();
+        assert_eq!(bytes_of(&entry), expected);
+        assert_eq!(bytes_of(&PtpDirectoryEntry::zeroed()), &[0; 12]);
     }
 
     #[test]
