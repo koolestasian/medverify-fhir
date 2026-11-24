@@ -4,8 +4,9 @@ use medverify_core::claim::{
 };
 use medverify_core::encoding::{encode_code_b36, encode_epoch_day};
 use medverify_core::fhir_pas::{validate_request, validate_response, ResponseContext};
-use medverify_core::index::{MmapMueIndex, MmapPtpIndex};
-use medverify_core::{mue, ncci, wiser};
+use medverify_core::index::{CatalogMode, MmapMueIndex, MmapPtpIndex};
+use medverify_core::{mue, ncci, stress, wiser};
+use std::env;
 use std::hint::black_box;
 use std::num::NonZeroU64;
 use std::path::Path;
@@ -26,7 +27,65 @@ fn measure<T>(criterion: &mut Criterion, name: &str, mut run: impl FnMut() -> T)
     println!("{name} individual p99: {} ns", latencies[9899]);
 }
 
+/// Whether two record lists hold the same records. The writer stores records sorted, while the
+/// generator emits them in generation order, so both are compared in byte order.
+fn same_records<T: bytemuck::Pod>(stored: &[T], generated: &[T]) -> bool {
+    let sorted = |records: &[T]| {
+        let mut records = records.to_vec();
+        records.sort_unstable_by(|a, b| bytemuck::bytes_of(a).cmp(bytemuck::bytes_of(b)));
+        records
+    };
+    stored.len() == generated.len()
+        && bytemuck::cast_slice::<T, u8>(&sorted(stored))
+            == bytemuck::cast_slice::<T, u8>(&sorted(generated))
+}
+
+/// Evaluates rotating ten-line claims against a catalog built by `medverify-index synthetic-stress`.
+fn stress_throughput(c: &mut Criterion, dir: &Path) {
+    let expected_rows: usize = env::var("MEDVERIFY_BENCH_EXPECT_PTP_ROWS")
+        .expect("MEDVERIFY_BENCH_EXPECT_PTP_ROWS is required with MEDVERIFY_BENCH_INDEX_DIR")
+        .parse()
+        .unwrap();
+    let ptp = MmapPtpIndex::open(dir.join("ncci_ptp.bin")).unwrap();
+    let mue = MmapMueIndex::open(dir.join("ncci_mue.bin")).unwrap();
+    assert_eq!(ptp.records().len(), expected_rows);
+    assert_eq!(ptp.catalog_mode(), CatalogMode::SyntheticStress);
+    assert_eq!(ptp.format_version(), 2);
+    assert_eq!(mue.catalog_mode(), CatalogMode::SyntheticStress);
+    // Both catalogs must be exactly what the generator writes for this row count, and the
+    // oracle reads the regenerated records, never the files under test.
+    let rows = u32::try_from(expected_rows).unwrap();
+    let ptp_records = stress::ptp_records(rows, stress::SEED);
+    let mue_records = stress::mue_records(&ptp_records, stress::SEED);
+    assert!(
+        same_records(ptp.records(), &ptp_records),
+        "PTP catalog differs from synthetic-stress output"
+    );
+    assert!(
+        same_records(mue.records(), &mue_records),
+        "MUE catalog differs from synthetic-stress output for this PTP catalog"
+    );
+    let claims = stress::claims(&ptp, 4096, stress::SEED);
+    let mix = stress::check_claims(&ptp, &mue, &ptp_records, &mue_records, &claims).unwrap();
+    println!(
+        "stress probe mix: {} probes, {} hits, {} interior misses, {} bucket misses",
+        mix.probes, mix.hits, mix.interior_misses, mix.bucket_misses
+    );
+    let mut next = 0;
+    measure(c, "stress_ten_line_claim", || {
+        let claim = &claims[next];
+        next = (next + 1) % claims.len();
+        (
+            black_box(ncci::evaluate(&ptp, black_box(claim)).unwrap()),
+            black_box(mue::evaluate(&mue, black_box(claim)).unwrap()),
+        )
+    });
+}
+
 fn throughput(c: &mut Criterion) {
+    if let Some(dir) = env::var_os("MEDVERIFY_BENCH_INDEX_DIR") {
+        return stress_throughput(c, Path::new(&dir));
+    }
     let dir = tempfile::tempdir().unwrap();
     let output = dir.path().join("indexes");
     let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
@@ -79,6 +138,7 @@ fn throughput(c: &mut Criterion) {
         modifiers: if i == 0 { &modifiers } else { &[] },
         modifier_evidence: &[],
         abn_liability_shift_attempted: i == 0,
+        claim_id: None,
     })
     .collect();
     let claim = || {

@@ -1,6 +1,6 @@
 # MedVerify-FHIR
 
-MedVerify-FHIR checks Medicare coding edits, Washington WISeR policy, and Da Vinci Prior Authorization Support (PAS) transactions. The Rust core provides all three checks. The typed Python API exposes the Medicare coding edit evaluators on standard and free-threaded CPython.
+MedVerify-FHIR checks Medicare coding edits, Washington WISeR policy, and Da Vinci Prior Authorization Support (PAS) transactions. The Rust core provides all three checks. The typed Python API exposes the Medicare coding edit evaluators and is tested on CPython 3.14 and free-threaded 3.14t.
 
 - **NCCI** evaluates procedure-to-procedure (PTP) and medically unlikely edits (MUE) against immutable indexes. The included dataset has 120 synthetic procedures.
 - **Washington WISeR** checks prior authorization and pre-payment review routing, epidural injection and cervical fusion criteria, tracking numbers, and provider exemptions. The bundled policy uses synthetic procedure mappings. Load an authorized table for actual codes with `wiser::Policy::from_toml`. [Bundled policy](policy/wa_wiser.toml)
@@ -25,9 +25,27 @@ print(f"{finding['code']}: {finding['total_units']} billed units, limit {finding
 PY
 ```
 
-Include lines from separate claims in one `evaluate` call when they share a beneficiary, billing provider, service date, and setting. Use `evaluate_batch` for independent groups. It returns results in input order, and threads can share one engine.
+Include lines that share a beneficiary, billing provider, service date, and setting in one `evaluate` call. MUE adjudication indicators (MAI) 2 and 3 total units for each code across those lines, including lines on separate claims. Use `evaluate_batch` for independent groups. Batches of 64 or more groups run in parallel. Results stay in input order, and evaluation errors report the lowest failing input index. Threads can share one engine.
 
-Rust callers can open the generated files with `MmapPtpIndex::open` and `MmapMueIndex::open` and pass `claim::ClaimLine` records to `ncci::evaluate` and `mue::evaluate`.
+MAI 1 applies the unit limit to each line. Pass `claim_id` when the claim is known. Within that claim, the evaluator allows one ordinary line per code and checks additional lines for an applicable billed modifier and matching, line-specific `ModifierEvidence`. Repeat modifiers (`76`, `77`, `91`) must trace to an original service and cannot support E/M lines. Distinct-service and anatomic modifiers must document which services were separate.
+
+The evaluator reports `unsupported_split` for an unsupported additional line on a known claim and `possible_unsupported_split` when an unsupported line may be part of a split and its claim ID is unknown. Both are coding-review findings. A line over its own unit limit receives a separate `claim_line` finding.
+
+Rust callers can open the generated files with `MmapPtpIndex::open` and `MmapMueIndex::open` and pass `claim::ClaimLine` records to `ncci::evaluate` and `mue::evaluate`. `write_ptp` produces format version 2, which adds a directory of column-one codes so a lookup searches only that code's rows. Version 1 PTP files still open.
+
+## Licensed CMS tables
+
+Operators with access to the CMS PTP and MUE release tables can compile them into indexes. Save each table as tab-separated text in one directory. List each file in `manifest.tsv` with its role (`ptp` or `mue`), setting, and, for MUE tables, its effective date and optional exclusive end date. [Manifest and table layouts](crates/medverify-core/src/cms.rs)
+
+```sh
+cargo run --release --locked -p medverify-core --bin medverify-index -- cms-tsv --data /path/to/release --out .cache/indexes/licensed
+```
+
+Use the Medicare Q4 2026 tables for this command. It labels both indexes `v323r0`, requires MUE effective dates in Q4 2026, and rejects PTP rows effective on or after January 1, 2027. A blank PTP deletion date leaves the interval open.
+
+The compiler discards descriptor and rationale text. Field errors identify the manifest entry, physical table row and field. The compiler publishes both index files together.
+
+Run `medverify-index verify-licensed DIR PTP_ROWS MUE_ROWS` to validate a published pair. The production loader checks both files, and the command requires the licensed catalog, PTP format version 2, MUE format version 1, and the supplied row counts.
 
 ## Tests and benchmarks
 
@@ -36,7 +54,7 @@ cargo test --locked --workspace
 python -m uv run --locked pytest -q
 ```
 
-The Rust benchmarks measure pair lookup, ten-line claim evaluation, and WISeR routing with PAS validation on synthetic inputs. [Workloads and measured results](BENCHMARKS.md)
+The Rust benchmarks measure pair lookup, ten-line claim evaluation, and WISeR routing with PAS validation. The scale benchmark runs PTP and MUE evaluation against a synthetic catalog with 4,506,527 PTP rows. [Workloads and measured results](BENCHMARKS.md)
 
 Open a pull request against `main` and wait for the applicable CI jobs to pass. Documentation-only PRs run repository hygiene and secret scanning. Code changes also run the Rust and Python jobs. Changes to FHIR or payer policy, sandbox files, CI, build manifests, or lockfiles also run the sandbox and Inferno suites.
 

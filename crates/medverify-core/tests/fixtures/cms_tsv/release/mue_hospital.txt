@@ -1,0 +1,3 @@
+HCPCS/CPT Code	Facility Outpatient Hospital Services MUE Values	MUE Adjudication Indicator	MUE Rationale
+Y9011	2	2 Date of Service Edit: Policy	CANARY-DESCRIPTOR-7Q synthetic rationale twelve
+Y9014	10	3 Date of Service Edit: Clinical	CANARY-DESCRIPTOR-7Q synthetic rationale thirteen

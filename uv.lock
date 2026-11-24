@@ -278,6 +278,7 @@ dev = [
     { name = "psutil" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "types-psutil" },
 ]
 
 [package.metadata]
@@ -291,6 +292,7 @@ dev = [
     { name = "psutil", specifier = ">=7.2.2" },
     { name = "pytest" },
     { name = "ruff", specifier = ">=0.17" },
+    { name = "types-psutil" },
 ]
 
 [[package]]
@@ -593,6 +595,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/2e/09/28329441dfa2c463e2d377a69d4ebbe4d51665e9dbd49fb421f3bc80d775/ruff-0.17.6-py3-none-win32.whl", hash = "sha256:c2f4af6670b7a0501904e881bb3f1f24bd0d964dec1eedbd85f0eb73786e1128", size = 9966266, upload-time = "2026-11-19T15:56:21.581Z" },
     { url = "https://files.pythonhosted.org/packages/4b/9d/18ba9730addfc7554c70d6f171fb8dc2c08e774d9fb2b98e7946ef845c59/ruff-0.17.6-py3-none-win_amd64.whl", hash = "sha256:9cd2fd9923e9806b8b6b67a3469e2258e84bd4d21e45d5a1a690afdfb9c8e57d", size = 10365847, upload-time = "2026-11-19T15:56:23.582Z" },
     { url = "https://files.pythonhosted.org/packages/70/8a/59c33e2a64a4f9672f7f842a0dc522915cfbbaffd13d37d0cec57d1c5c5d/ruff-0.17.6-py3-none-win_arm64.whl", hash = "sha256:d8b14e1473dc86ab9069cf7a2ba5041dc012f59110201844ed04cfddf07055a0", size = 9926224, upload-time = "2026-11-19T15:56:25.269Z" },
+]
+
+[[package]]
+name = "types-psutil"
+version = "7.2.2.20261122"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/af/c3/f2b13b3a78628887c407bee49eed3e8bfb5e23e2e8407c31146269226215/types_psutil-7.2.2.20261122.tar.gz", hash = "sha256:30879c88d871c99f4a632cb17826ce8ec55de2c4884ed84e4f8f293b91c6439e", size = 27671, upload-time = "2026-11-22T09:00:03.397Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/78/da/cc4e00f377450ebc69075f10eea90dce14a534e789426367347e1a1a64b2/types_psutil-7.2.2.20261122-py3-none-any.whl", hash = "sha256:ee60d47cddb6ecace68aeb5326bce47fef706a00f728df7ec27dae31d4ed8472", size = 33505, upload-time = "2026-11-22T09:00:02.507Z" },
 ]
 
 [[package]]

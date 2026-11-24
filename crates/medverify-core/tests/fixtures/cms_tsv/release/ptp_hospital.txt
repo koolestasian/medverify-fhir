@@ -1,0 +1,4 @@
+Column 1	Column 2	* = In existence prior to 1996	Effective Date	Deletion Date *=no data	Modifier 0=not allowed 1=allowed 9=not applicable	PTP Edit Rationale
+Y9001	Y9002		20260101	*	0	CANARY-DESCRIPTOR-7Q synthetic rationale six
+Y9007	Y9008	*	20100101	20251231	1	CANARY-DESCRIPTOR-7Q synthetic rationale seven
+Y9007	Y9008		20260101	20260101	9	CANARY-DESCRIPTOR-7Q synthetic rationale eight

@@ -1,0 +1,4 @@
+HCPCS/CPT Code	Practitioner Services MUE Values	MUE Adjudication Indicator	MUE Rationale
+Y9011	3	1 Line Edit	CANARY-DESCRIPTOR-7Q synthetic rationale nine
+Y9012	65535	2 Date of Service Edit: Policy	CANARY-DESCRIPTOR-7Q synthetic rationale ten
+Y9013	0	3 Date of Service Edit: Clinical	CANARY-DESCRIPTOR-7Q synthetic rationale eleven

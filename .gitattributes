@@ -1,3 +1,5 @@
 *.sh text eol=lf
 # Compiled into the Rust core with include_str!, so every checkout must embed identical bytes.
 policy/*.toml text eol=lf
+# Byte-exact inputs for the cms-tsv tests; the tests add CRLF variants themselves.
+crates/medverify-core/tests/fixtures/cms_tsv/** text eol=lf

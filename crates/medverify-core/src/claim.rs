@@ -87,6 +87,10 @@ pub enum EvidenceBasis {
     NonOverlappingService,
     /// A documented distinct service where policy permits a generic modifier.
     DistinctService,
+    /// A repeat of the same procedure by the same practitioner on the same day (modifier 76).
+    RepeatProcedureSamePractitioner,
+    /// A repeat of the same procedure by a different practitioner on the same day (modifier 77).
+    RepeatProcedureOtherPractitioner,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,6 +112,21 @@ pub struct ClaimLine<'a> {
     /// Include documented applicable modifiers here even if they were omitted from the bill.
     pub modifier_evidence: &'a [ModifierEvidence],
     pub abn_liability_shift_attempted: bool,
+    /// Opaque identifier of the claim that carries the line; `None` when claim boundaries are unknown.
+    pub claim_id: Option<&'a str>,
+}
+
+/// Whether a modifier may be reported on this kind of service. PTP bypass and MUE repeat
+/// reporting both use this one rule: `59` never describes an E/M service, and `24`, `25`, `27`
+/// and `57` describe only E/M services.
+pub(crate) fn fits_service(modifier: Modifier, line: &ClaimLine<'_>) -> bool {
+    let em = line.service_kind == ServiceKind::EvaluationAndManagement;
+    match &modifier.0 {
+        b"24" | b"25" | b"57" => em,
+        b"27" => em && line.service_day.setting == Setting::HospitalOutpatient,
+        b"59" => !em,
+        _ => true,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

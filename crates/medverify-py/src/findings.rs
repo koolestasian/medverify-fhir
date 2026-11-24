@@ -91,6 +91,7 @@ pub struct Limit {
     code: String,
     scope: &'static str,
     line_id: Option<u64>,
+    claim_id: Option<String>,
     max_units: u16,
     total_units: u64,
     abn_cannot_shift_liability: bool,
@@ -98,16 +99,25 @@ pub struct Limit {
 
 impl From<MueFinding<'_>> for Limit {
     fn from(f: MueFinding<'_>) -> Self {
-        let (scope, line_id) = match f.scope {
-            MueScope::ClaimLine { line_id } => ("claim_line", Some(line_id)),
-            MueScope::AbsoluteServiceDayLimit => ("absolute_service_day_limit", None),
-            MueScope::ServiceDayClinicalReview => ("service_day_clinical_review", None),
+        let (scope, line_id, claim_id) = match f.scope {
+            MueScope::ClaimLine { line_id } => ("claim_line", Some(line_id), None),
+            MueScope::UnsupportedSplit { line_id, claim_id } => (
+                "unsupported_split",
+                Some(line_id),
+                Some(claim_id.to_owned()),
+            ),
+            MueScope::PossibleUnsupportedSplit { line_id } => {
+                ("possible_unsupported_split", Some(line_id), None)
+            }
+            MueScope::AbsoluteServiceDayLimit => ("absolute_service_day_limit", None, None),
+            MueScope::ServiceDayClinicalReview => ("service_day_clinical_review", None, None),
         };
         Self {
             service_day: f.service_day.into(),
             code: ascii(f.code.bytes()),
             scope,
             line_id,
+            claim_id,
             max_units: f.max_units,
             total_units: f.total_units,
             abn_cannot_shift_liability: f.abn_cannot_shift_liability,

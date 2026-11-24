@@ -29,6 +29,7 @@ class ClaimLine:
         modifiers: Sequence[str] | None = None,
         modifier_evidence: Sequence[ModifierEvidence] | None = None,
         abn_liability_shift_attempted: bool = False,
+        claim_id: str | None = None,
     ) -> ClaimLine: ...
 
 @final

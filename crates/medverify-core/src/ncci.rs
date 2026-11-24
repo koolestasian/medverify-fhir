@@ -1,6 +1,5 @@
 use crate::claim::{
-    group_lines, ClaimLine, EvaluationError, EvidenceBasis, Modifier, ServiceDay, ServiceKind,
-    Setting,
+    fits_service, group_lines, ClaimLine, EvaluationError, EvidenceBasis, Modifier, ServiceDay,
 };
 use crate::index::MmapPtpIndex;
 
@@ -109,16 +108,6 @@ fn required_evidence(modifier: Modifier) -> Option<EvidenceBasis> {
         | [b'F' | b'T', b'1'..=b'9'] => AnatomicSite,
         _ => return None,
     })
-}
-
-fn fits_service(modifier: Modifier, line: &ClaimLine<'_>) -> bool {
-    let em = line.service_kind == ServiceKind::EvaluationAndManagement;
-    match &modifier.0 {
-        b"24" | b"25" | b"57" => em,
-        b"27" => em && line.service_day.setting == Setting::HospitalOutpatient,
-        b"59" => !em,
-        _ => true,
-    }
 }
 
 fn specific_modifier(

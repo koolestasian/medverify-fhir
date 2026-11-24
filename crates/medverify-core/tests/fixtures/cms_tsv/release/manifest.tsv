@@ -1,0 +1,7 @@
+role	setting	file	effective	end_exclusive
+ptp	practitioner	ptp_practitioner_1.txt		
+ptp	practitioner	ptp_practitioner_2.txt		
+ptp	hospital	ptp_hospital.txt		
+mue	practitioner	mue_practitioner.txt	2026-10-01	
+mue	hospital	mue_hospital.txt	2026-10-01	2027-01-01
+mue	dme	mue_dme.txt	2026-10-01	

@@ -124,7 +124,8 @@ self_test() (
     # must never reach a commit, even when force-added past .gitignore.
     for forbidden in memory-bank/activeContext.md docs/internal/PLAN.md \
         sandbox/vendor/davinci-pas-server/go/main.go data/raw/cms-ptp.zip \
-        sandbox/vendor/synthea/synthea-with-dependencies.jar artifacts/inferno/pas.json; do
+        sandbox/vendor/synthea/synthea-with-dependencies.jar artifacts/inferno/pas.json \
+        scripts/ingest_cms.py; do
         mkdir -p "$(dirname "$forbidden")"
         printf 'fixture\n' > "$forbidden"
         if bash "$script" --candidate; then

@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 95ac4f4c75bd9bd34401cd8c47c483ae3012b505d0a41a5079cf278b09d7dd2c # shrinks to specs = [Spec { units: 1, claim: 0, evidence_kind: 0, target: 0, abn: false, sort_key: 0 }, Spec { units: 1, claim: 1, evidence_kind: 1, target: 0, abn: false, sort_key: 0 }]
+cc 7af4e2c9a620289667dadcf09c19c00dd245006e4f630c56068c2b54a3705491 # shrinks to specs = [Spec { units: 1, claim: 0, evidence_kind: 0, target: 0, abn: false, sort_key: 0 }, Spec { units: 1, claim: 0, evidence_kind: 0, target: 0, abn: false, sort_key: 0 }, Spec { units: 1, claim: 2, evidence_kind: 1, target: 0, abn: false, sort_key: 0 }, Spec { units: 1, claim: 2, evidence_kind: 1, target: 2, abn: false, sort_key: 0 }]
