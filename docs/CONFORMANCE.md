@@ -7,7 +7,7 @@ has its own gate in `cargo test` (crates/medverify-core/tests/pas.rs). The suite
 over TLS signed by a sandbox test CA. Passing Inferno is a conformance signal for these pinned
 builds, not a certification.
 
-Overall verdict: **pass**. Run finished 20261124T193218Z (UTC). Detailed reports: `artifacts/inferno/20261124T192000Z/`.
+Overall verdict: **pass**. Run finished 20261125T044947Z (UTC). Detailed reports: `artifacts/inferno/20261125T042740Z/`.
 
 A suite passes only when every test and group has a known verdict that is pass, omit (does not
 apply), or a skip of something the kit marks optional. A missing or unknown verdict, failure,
@@ -17,10 +17,10 @@ error, cancellation, timeout, unresolved wait or required skip fails it.
 
 | Item | Value |
 |---|---|
-| Base commit | 777ec8e13cb28e34be1352d5001e7b6c8215561c |
+| Base commit | cd8a7d217c7ef21abe2fe25619cb70cb83556619 |
 | Working tree | clean |
-| Files | 92 |
-| Content digest | faacba2cecb955895f7bc333c3ce24b6862a0aa90b4b19f1a883c70d69161ebd |
+| Files | 94 |
+| Content digest | 47624fcfdac3fd4ed7a5149222865040ec8263eb906206f37462b03a9f7cc7ab |
 
 ## Results
 
@@ -48,23 +48,23 @@ error, cancellation, timeout, unresolved wait or required skip fails it.
 
 | Step | Seconds |
 |---|---|
-| Seed: synthea | 26.6 |
-| Seed: upload | 28.4 |
-| Seed: fingerprint | 7.7 |
-| Reset cycle 1 | 28.8 |
-| Reset cycle 2 | 26.5 |
-| CRD group 1 | 9.1 |
-| CRD group 3 | 184.8 |
+| Seed: synthea | 28.9 |
+| Seed: upload | 35.0 |
+| Seed: fingerprint | 9.1 |
+| Reset cycle 1 | 36.5 |
+| Reset cycle 2 | 34.1 |
+| CRD group 1 | 9.0 |
+| CRD group 3 | 260.3 |
 | CRD group 2 | 3.0 |
 | CRD group 4 | 3.0 |
-| DTR group 1 | 175.0 |
-| DTR group 2 | 3.1 |
-| DTR group 3 | 9.3 |
+| DTR group 1 | 322.4 |
+| DTR group 2 | 3.0 |
+| DTR group 3 | 9.1 |
 | DTR group 4 | 3.0 |
-| PAS group 1 | 201.8 |
-| PAS group 2 | 27.2 |
-| PAS group 3 | 21.1 |
-| PAS group 4 | 3.0 |
+| PAS group 1 | 310.2 |
+| PAS group 2 | 36.2 |
+| PAS group 3 | 232.5 |
+| PAS group 4 | 3.1 |
 
 ## Hardware
 
