@@ -1,4 +1,4 @@
-"""Installed synthetic verifier demonstration."""
+"""Installed MedVerify command-line entry point."""
 
 import argparse
 import json
@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 from time import perf_counter_ns
 
 from . import ClaimLine, ModifierEvidence, fhir_pas, wiser
-from ._medverify import _demo_documents, _demo_engine
+from ._medverify import _demo_documents, _demo_engine, _verify_receipt
 
 
 def _line(
@@ -143,7 +143,20 @@ def main() -> int:
     commands.add_parser(
         "demo", help="run four synthetic checks and their repaired controls"
     )
-    parser.parse_args()
+    verify = commands.add_parser(
+        "verify-receipt", help="verify a signed receipt with a trusted Ed25519 key"
+    )
+    verify.add_argument("file", type=Path)
+    verify.add_argument("--public-key", type=Path, required=True)
+    args = parser.parse_args()
+    if args.command == "verify-receipt":
+        try:
+            _verify_receipt(args.file, args.public_key)
+        except ValueError as error:
+            print(f"medverify verify-receipt: {error}", file=sys.stderr)
+            return 1
+        print("Receipt signature verified.")
+        return 0
     try:
         with TemporaryDirectory(prefix="medverify-demo-") as directory:
             _demo(Path(directory))

@@ -3,3 +3,4 @@
 policy/*.toml text eol=lf
 # Byte-exact inputs for the cms-tsv tests; the tests add CRLF variants themselves.
 crates/medverify-core/tests/fixtures/cms_tsv/** text eol=lf
+tests/fixtures/receipts/** text eol=lf

@@ -3,28 +3,28 @@ use crate::claim::{
 };
 use crate::index::MmapPtpIndex;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub enum PtpOutcome {
     ModifierProhibited,
     SupportedModifierRequired,
     Bypassed,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
 pub enum ModifierIssueKind {
     MissingEvidence,
     WrongService,
     MoreSpecificModifierRequired(Modifier),
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
 pub struct ModifierIssue {
     pub line_id: u64,
     pub modifier: Modifier,
     pub kind: ModifierIssueKind,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct PtpFinding<'a> {
     pub service_day: ServiceDay<'a>,
     pub column_one_line_id: u64,
@@ -54,13 +54,7 @@ pub fn evaluate<'a>(
                     let two_supported = check_modifiers(two, one, &mut modifier_issues);
                     modifier_issues.sort_unstable();
                     modifier_issues.dedup();
-                    let outcome = if edit.ccmi == 0 {
-                        PtpOutcome::ModifierProhibited
-                    } else if one_supported || two_supported {
-                        PtpOutcome::Bypassed
-                    } else {
-                        PtpOutcome::SupportedModifierRequired
-                    };
+                    let outcome = ptp_outcome(edit.ccmi, one_supported, two_supported);
                     findings.push(PtpFinding {
                         service_day: day,
                         column_one_line_id: one.id,
@@ -76,6 +70,28 @@ pub fn evaluate<'a>(
     }
     findings.sort_unstable_by_key(|f| (f.service_day, f.column_two_line_id, f.column_one_line_id));
     Ok(findings)
+}
+
+fn ptp_outcome(ccmi: u8, one_supported: bool, two_supported: bool) -> PtpOutcome {
+    if ccmi == 0 {
+        PtpOutcome::ModifierProhibited
+    } else if one_supported || two_supported {
+        PtpOutcome::Bypassed
+    } else {
+        PtpOutcome::SupportedModifierRequired
+    }
+}
+
+#[cfg(kani)]
+#[kani::proof]
+#[kani::unwind(1)]
+fn ncci_ccmi_zero_never_bypasses() {
+    let one_supported: bool = kani::any();
+    let two_supported: bool = kani::any();
+    assert_eq!(
+        ptp_outcome(0, one_supported, two_supported),
+        PtpOutcome::ModifierProhibited
+    );
 }
 
 fn required_evidence(modifier: Modifier) -> Option<EvidenceBasis> {

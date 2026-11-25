@@ -151,6 +151,8 @@ pub struct Policy {
     appendix_c: Vec<Association>,
 }
 
+pub(crate) const WASHINGTON_POLICY_TOML: &str = include_str!("../../../policy/wa_wiser.toml");
+
 #[derive(Debug)]
 pub enum PolicyError {
     Toml(toml::de::Error),
@@ -174,8 +176,7 @@ impl std::error::Error for PolicyError {}
 
 impl Policy {
     pub fn washington_synthetic() -> Self {
-        Self::from_toml(include_str!("../../../policy/wa_wiser.toml"))
-            .expect("bundled Washington WISeR policy")
+        Self::from_toml(WASHINGTON_POLICY_TOML).expect("bundled Washington WISeR policy")
     }
 
     pub fn from_toml(input: &str) -> Result<Self, PolicyError> {
@@ -519,8 +520,12 @@ impl Utn {
     }
 
     pub fn valid_on(self, decision: Date, service: Date) -> bool {
-        (0..120).contains(&(service - decision).whole_days())
+        valid_utn_day_offset((service - decision).whole_days())
     }
+}
+
+fn valid_utn_day_offset(days: i64) -> bool {
+    (0..120).contains(&days)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -572,14 +577,7 @@ pub fn validate_utn(
         UtnField::ManualInstitutionalTreatmentAuthorization(value)
             if site == Site::HospitalOutpatient =>
         {
-            if value.len() != 32 {
-                return Err(UtnError::WrongPlacement);
-            }
-            let value = value.as_bytes();
-            if value[..18].windows(14).any(|part| part == utn.0) {
-                return Err(UtnError::WrongPlacement);
-            }
-            &value[18..32]
+            return validate_manual_utn(value.as_bytes(), utn);
         }
         UtnField::Electronic837 {
             loop_id,
@@ -611,6 +609,62 @@ pub fn validate_utn(
         _ => return Err(UtnError::WrongClaim),
     };
     (submitted == utn.0).then_some(()).ok_or(UtnError::WrongUtn)
+}
+
+fn validate_manual_utn(value: &[u8], utn: Utn) -> Result<(), UtnError> {
+    let Ok(field) = <&[u8; 32]>::try_from(value) else {
+        return Err(UtnError::WrongPlacement);
+    };
+    let mut start = 0;
+    while start <= 4 {
+        if manual_utn_matches(field, start, utn) {
+            return Err(UtnError::WrongPlacement);
+        }
+        start += 1;
+    }
+    manual_utn_matches(field, 18, utn)
+        .then_some(())
+        .ok_or(UtnError::WrongUtn)
+}
+
+fn manual_utn_matches(field: &[u8; 32], start: usize, utn: Utn) -> bool {
+    let mut offset = 0;
+    while offset < utn.0.len() {
+        if field[start + offset] != utn.0[offset] {
+            return false;
+        }
+        offset += 1;
+    }
+    true
+}
+
+#[cfg(kani)]
+#[kani::proof]
+#[kani::unwind(34)]
+fn wiser_utn_validity_and_placement() {
+    let day_offset: i64 = kani::any();
+    kani::assert(
+        valid_utn_day_offset(day_offset) == (0 <= day_offset && day_offset < 120),
+        "UTN validity is [0, 120) calendar days",
+    );
+
+    let utn = Utn(kani::any());
+    let bytes: [u8; 33] = kani::any();
+    let len: usize = kani::any();
+    kani::assume(len <= bytes.len());
+    let has_utn = |start| bytes.get(start..start + 14) == Some(utn.0.as_slice());
+    let prefix_contains_utn = has_utn(0) || has_utn(1) || has_utn(2) || has_utn(3) || has_utn(4);
+    let expected = if len != 32 || prefix_contains_utn {
+        Err(UtnError::WrongPlacement)
+    } else if has_utn(18) {
+        Ok(())
+    } else {
+        Err(UtnError::WrongUtn)
+    };
+    kani::assert(
+        validate_manual_utn(bytes.get(..len).unwrap(), utn) == expected,
+        "manual UB-04 uses positions 19 through 32 and rejects a UTN in the first 18 bytes",
+    );
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Deserialize)]

@@ -9,14 +9,23 @@ pub const NO_DELETION_DATE: u16 = u16::MAX;
 
 pub fn encode_code_b36(code: &str) -> Option<u32> {
     let bytes: &[u8; 5] = code.as_bytes().try_into().ok()?;
-    bytes.iter().try_fold(0, |value, &byte| {
-        let digit = match byte.to_ascii_uppercase() {
-            upper @ b'A'..=b'Z' => upper - b'A' + 10,
-            digit @ b'0'..=b'9' => digit - b'0',
-            _ => return None,
-        };
-        Some(value * 36 + u32::from(digit))
-    })
+    encode_b36_bytes(bytes)
+}
+
+fn encode_b36_bytes(bytes: &[u8; 5]) -> Option<u32> {
+    let [a, b, c, d, e] = *bytes;
+    Some(
+        (((b36_digit(a)? * 36 + b36_digit(b)?) * 36 + b36_digit(c)?) * 36 + b36_digit(d)?) * 36
+            + b36_digit(e)?,
+    )
+}
+
+fn b36_digit(byte: u8) -> Option<u32> {
+    Some(u32::from(match byte.to_ascii_uppercase() {
+        upper @ b'A'..=b'Z' => upper - b'A' + 10,
+        digit @ b'0'..=b'9' => digit - b'0',
+        _ => return None,
+    }))
 }
 
 pub fn decode_code_b36(mut value: u32) -> Option<[u8; 5]> {
@@ -24,9 +33,12 @@ pub fn decode_code_b36(mut value: u32) -> Option<[u8; 5]> {
         return None;
     }
     let mut code = [0; 5];
-    for byte in code.iter_mut().rev() {
-        *byte = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"[(value % 36) as usize];
-        value /= 36;
+    let mut i = code.len();
+    while i > 0 {
+        i -= 1;
+        let quotient = value / 36;
+        code[i] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"[(value - quotient * 36) as usize];
+        value = quotient;
     }
     Some(code)
 }
@@ -87,6 +99,37 @@ const _: () = {
     assert!(core::mem::size_of::<MueRecord>() == 16);
     assert!(core::mem::align_of::<MueRecord>() == 4);
 };
+
+#[cfg(kani)]
+#[kani::proof]
+#[kani::unwind(8)]
+fn encoding_b36_order_roundtrip() {
+    let value: u32 = kani::any();
+    kani::assume(value <= MAX_PROCEDURE_CODE);
+    let code = decode_code_b36(value).unwrap();
+    kani::assert(
+        encode_b36_bytes(&code) == Some(value),
+        "base-36 integer round trip",
+    );
+
+    let left: [u8; 5] = kani::any();
+    let right: [u8; 5] = kani::any();
+    let canonical = |b| matches!(b, b'0'..=b'9' | b'A'..=b'Z');
+    let mut i = 0;
+    while i < 5 {
+        kani::assume(canonical(left[i]) && canonical(right[i]));
+        i += 1;
+    }
+    // Big-endian numeric order is unsigned lexicographic order for five equal-width bytes.
+    let ascii_order = |[a, b, c, d, e]: [u8; 5]| u64::from_be_bytes([0, 0, 0, a, b, c, d, e]);
+    kani::assert(
+        ascii_order(left).cmp(&ascii_order(right))
+            == encode_b36_bytes(&left)
+                .unwrap()
+                .cmp(&encode_b36_bytes(&right).unwrap()),
+        "base-36 encoding preserves ASCII code order",
+    );
+}
 
 #[cfg(test)]
 mod tests {

@@ -7,6 +7,7 @@ pub mod fhir_pas;
 pub mod index;
 pub mod mue;
 pub mod ncci;
+pub mod receipt;
 pub mod state;
 pub mod stress;
 pub mod wiser;

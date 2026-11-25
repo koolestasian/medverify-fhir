@@ -122,6 +122,30 @@ jobs:
             --ignored --exact official_pas_examples_follow_the_published_profiles
       - run: cargo deny check
 
+  kani:
+    needs: hygiene
+    if: needs.hygiene.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      KANI_VERSION: 0.67.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Kani
+        run: |
+          cargo install --locked kani-verifier --version "$KANI_VERSION"
+          cargo kani setup
+      - name: Prove NCCI and WISeR invariants
+        shell: bash
+        run: |
+          for proof in encoding_b36_order_roundtrip ncci_ccmi_zero_never_bypasses \
+                       mue_mai2_split_and_overflow wiser_utn_validity_and_placement
+          do
+            cargo kani -p medverify-core --harness "$proof"
+          done
+
   python:
     needs: hygiene
     if: needs.hygiene.outputs.code == 'true'
