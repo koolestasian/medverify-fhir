@@ -78,8 +78,11 @@ checkpoint() {
 recover_template() {
     if ! exists "$template" && exists "${template}_prev"; then
         sql "ALTER DATABASE ${template}_prev RENAME TO $template;"
-        sql "ALTER DATABASE $template WITH IS_TEMPLATE true ALLOW_CONNECTIONS false;"
         printf 'reset_sandbox: restored the previous snapshot after an interrupted refresh\n' >&2
+    fi
+    # An interruption can leave the snapshot renamed but still open to connections.
+    if exists "$template"; then
+        sql "ALTER DATABASE $template WITH IS_TEMPLATE true ALLOW_CONNECTIONS false;"
     fi
     drop "${template}_prev"
     drop "${template}_next"
