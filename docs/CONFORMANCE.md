@@ -1,26 +1,25 @@
 # Conformance
 
-Results of the official Inferno server test suites against the sandbox payer servers, written by
-`scripts/run_inferno.py` from an actual local run. The suites exercise the Nirmitee Go CRD, DTR and
-PAS servers built from the commits below; they do not exercise MedVerify's Rust PAS validator, which
-has its own gate in `cargo test` (crates/medverify-core/tests/pas.rs). The suites reach each server
-over TLS signed by a sandbox test CA. Passing Inferno is a conformance signal for these pinned
-builds, not a certification.
+The official Inferno suites exercised the pinned Da Vinci CRD, DTR, and PAS
+sandbox payer servers over TLS using the sandbox test CA. The Rust PAS
+validator has its own [test suite](../crates/medverify-core/tests/pas.rs).
 
-Overall verdict: **pass**. Run finished 20261124T005448Z (UTC). Detailed reports: `artifacts/inferno/20261124T005448Z/`.
+Overall verdict: **pass**. The run finished at 04:49:47 UTC on November 25, 2026.
+The tested commit and content digest below identify the checkout used for
+that run.
 
 A suite passes only when every test and group has a known verdict that is pass, omit (does not
 apply), or a skip of something the kit marks optional. A missing or unknown verdict, failure,
 error, cancellation, timeout, unresolved wait or required skip fails it.
 
-## Candidate
+## Tested tree
 
 | Item | Value |
 |---|---|
-| Base commit | a9369792e20b00ace3e2924ebc9c86cee48a0da4 |
-| Working tree | uncommitted changes present |
-| Files | 64 |
-| Content digest | e433ff9f7905e45d9425b6176b3a7a29931d408d879932b101fbec8b18c81b02 |
+| Base commit | cd8a7d217c7ef21abe2fe25619cb70cb83556619 |
+| Working tree | clean |
+| Files | 94 |
+| Content digest | 47624fcfdac3fd4ed7a5149222865040ec8263eb906206f37462b03a9f7cc7ab |
 
 ## Results
 
@@ -48,22 +47,22 @@ error, cancellation, timeout, unresolved wait or required skip fails it.
 
 | Step | Seconds |
 |---|---|
-| Seed: synthea | 25.2 |
-| Seed: upload | 17.9 |
-| Seed: fingerprint | 9.6 |
-| Reset cycle 1 | 44.8 |
-| Reset cycle 2 | 34.9 |
-| CRD group 1 | 3.0 |
-| CRD group 3 | 133.0 |
-| CRD group 2 | 3.1 |
-| CRD group 4 | 3.1 |
-| DTR group 1 | 99.5 |
-| DTR group 2 | 3.1 |
-| DTR group 3 | 12.2 |
+| Seed: synthea | 28.9 |
+| Seed: upload | 35.0 |
+| Seed: fingerprint | 9.1 |
+| Reset cycle 1 | 36.5 |
+| Reset cycle 2 | 34.1 |
+| CRD group 1 | 9.0 |
+| CRD group 3 | 260.3 |
+| CRD group 2 | 3.0 |
+| CRD group 4 | 3.0 |
+| DTR group 1 | 322.4 |
+| DTR group 2 | 3.0 |
+| DTR group 3 | 9.1 |
 | DTR group 4 | 3.0 |
-| PAS group 1 | 9.1 |
-| PAS group 2 | 18.1 |
-| PAS group 3 | 51.3 |
+| PAS group 1 | 310.2 |
+| PAS group 2 | 36.2 |
+| PAS group 3 | 232.5 |
 | PAS group 4 | 3.1 |
 
 ## Hardware

@@ -1,11 +1,12 @@
 use crate::claim::ProcedureCode;
-use serde::Deserialize;
+pub use crate::state::State;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use time::macros::format_description;
 use time::{Date, Duration, Month};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Category {
     KneeArthroscopy,
@@ -44,7 +45,8 @@ pub enum Site {
     Other,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Plan {
     OriginalMedicare,
     RailroadMedicare,
@@ -55,6 +57,10 @@ fn date<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Date, D::Er
     let value = String::deserialize(deserializer)?;
     Date::parse(&value, format_description!("[year]-[month]-[day]"))
         .map_err(serde::de::Error::custom)
+}
+
+fn serialize_date<S: serde::Serializer>(date: &Date, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.collect_str(date)
 }
 
 fn optional_date<'de, D: serde::Deserializer<'de>>(
@@ -78,10 +84,11 @@ fn procedure<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Proced
         .ok_or_else(|| serde::de::Error::custom("invalid procedure code"))
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GoldCardRule {
     #[serde(deserialize_with = "date")]
+    #[serde(serialize_with = "serialize_date")]
     pub effective: Date,
     pub percent: u8,
     pub minimum_requests: u32,
@@ -290,7 +297,7 @@ impl Policy {
     }
 
     pub fn route(&self, service: &Service<'_>, stage: Stage) -> Route {
-        if service.state != "WA"
+        if service.state != State::WA
             || service.plan != Plan::OriginalMedicare
             || service.emergency
             || service.inpatient_only
@@ -402,15 +409,20 @@ impl Npi {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AssessmentPeriod {
+    #[serde(deserialize_with = "date")]
     pub from: Date,
+    #[serde(deserialize_with = "date")]
     pub through: Date,
     /// The eligibility date selects the threshold even when the assessment period ended earlier.
+    #[serde(deserialize_with = "date")]
     pub eligibility_date: Date,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AssessmentOutcome {
     Affirmed,
     NonAffirmed,
@@ -438,7 +450,7 @@ pub struct Exemption<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Service<'a> {
-    pub state: &'a str,
+    pub state: State,
     pub plan: Plan,
     pub site: Site,
     pub date: Date,
@@ -454,15 +466,18 @@ pub struct Service<'a> {
     pub exemption: Option<Exemption<'a>>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PriorDecision {
     ProvisionalAffirmation,
     NonAffirmation,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Stage {
     Planning {
+        #[serde(deserialize_with = "date")]
         as_of: Date,
         elect_prior_authorization: bool,
     },
@@ -480,9 +495,11 @@ pub enum Route {
     PriorAuthorizationDecision(Category, PriorDecision),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AdjudicatedLine {
     pub sequence: u32,
+    #[serde(deserialize_with = "procedure")]
     pub code: ProcedureCode,
     /// The primary was non-affirmed or denied in WISeR pre-payment review.
     pub wiser_denied: bool,
@@ -524,7 +541,8 @@ pub enum UtnField<'a> {
     ManualInstitutionalTreatmentAuthorization(&'a str),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum UtnError {
     OutsideValidity,
     WrongClaim,
@@ -595,20 +613,23 @@ pub fn validate_utn(
     (submitted == utn.0).then_some(()).ok_or(UtnError::WrongUtn)
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Region {
     CervicalThoracic,
     LumbarSacral,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Approach {
     Transforaminal,
     Interlaminar,
     Caudal,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EsiIndication {
     RadicularSymptoms,
     PostLaminectomySyndrome,
@@ -616,7 +637,8 @@ pub enum EsiIndication {
     Other,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ConservativeCare {
     FailedAfterWeeks(u16),
     Intolerant,
@@ -624,7 +646,8 @@ pub enum ConservativeCare {
     Undocumented,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ImagingGuidance {
     CtOrFluoroscopyWithContrast,
     CtOrFluoroscopyWithoutContrast {
@@ -636,7 +659,8 @@ pub enum ImagingGuidance {
     Other,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Laterality {
     None,
     Right,
@@ -644,14 +668,16 @@ pub enum Laterality {
     Bilateral50,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EsiBilling {
     Professional,
     AscFacility,
     HospitalOutpatientFacility,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EsiLine {
     pub region: Region,
     pub level: u8,
@@ -659,13 +685,16 @@ pub struct EsiLine {
     pub units: u8,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EsiSession {
+    #[serde(deserialize_with = "date")]
     pub date: Date,
     pub region: Region,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RepeatEsi {
     SustainedImprovement {
         percent: u8,
@@ -673,6 +702,7 @@ pub enum RepeatEsi {
         same_scale: bool,
     },
     PoorInitialResponse {
+        #[serde(deserialize_with = "date")]
         initial_date: Date,
         changed_approach_level_or_drug: bool,
         documented_rationale: bool,
@@ -700,7 +730,8 @@ pub struct EsiEvidence<'a> {
     pub repeat: Option<RepeatEsi>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EsiFinding {
     Indication,
     ConservativeCare,
@@ -842,7 +873,8 @@ pub fn evaluate_esi(evidence: &EsiEvidence<'_>) -> Vec<EsiFinding> {
     findings
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Instability {
     /// Translation or subluxation on lateral or dynamic radiographs, in tenths of a millimeter.
     pub translation_tenths_mm: u16,
@@ -855,14 +887,16 @@ impl Instability {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Stenosis {
     Central,
     LateralRecess,
     Foraminal,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ImagingCause {
     DegenerativeDiscDisease,
     Tumor,
@@ -874,7 +908,8 @@ pub enum ImagingCause {
     Other,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Neurology {
     pub myelopathy_class: u8,
     pub progressive_deficit_during_care: bool,
@@ -884,7 +919,8 @@ pub struct Neurology {
     pub gait_dexterity_or_sphincter_symptoms: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Deformity {
     QualifyingCervicalDeformity,
     SymptomaticPseudarthrosis {
@@ -898,7 +934,8 @@ pub enum Deformity {
     Other,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum FusionIndication {
     NerveRootImpingement,
     SymptomaticCanalStenosis,
@@ -925,7 +962,8 @@ pub enum FusionIndication {
     },
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FusionEvidence {
     pub indication: FusionIndication,
     pub arm_pain_vas: u8,
@@ -941,7 +979,8 @@ pub struct FusionEvidence {
     pub neurology: Neurology,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FusionFinding {
     Symptoms,
     ConservativeCare,

@@ -1,5 +1,8 @@
+mod demo;
+mod fhir_pas;
 mod findings;
 mod line;
+mod wiser;
 
 use findings::Findings;
 use line::{ClaimLine, ModifierEvidence};
@@ -9,6 +12,7 @@ use medverify_core::{mue, ncci};
 use pyo3::exceptions::{PyOverflowError, PyValueError};
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use serde::{de::DeserializeOwned, Serialize};
 use std::io;
 use std::path::PathBuf;
 
@@ -21,6 +25,53 @@ struct MedVerifyEngine {
 
 /// Batches below this size run on the calling thread.
 const PARALLEL_BATCH: usize = 64;
+
+fn decode<T: DeserializeOwned>(text: &str, input: &str) -> PyResult<T> {
+    serde_json::from_str(text).map_err(|error| {
+        PyValueError::new_err(format!(
+            "invalid {input} at line {}, column {}",
+            error.line(),
+            error.column()
+        ))
+    })
+}
+
+/// Parse a FHIR JSON document, rejecting repeated property names that a plain parse would merge.
+fn decode_document(text: &str) -> PyResult<serde_json::Value> {
+    medverify_core::fhir_pas::parse_json(text).map_err(|error| {
+        PyValueError::new_err(format!(
+            "invalid FHIR JSON at line {}, column {}{}",
+            error.line(),
+            error.column(),
+            if error.is_data() {
+                ": duplicate property"
+            } else {
+                ""
+            }
+        ))
+    })
+}
+
+fn state(value: &str) -> PyResult<medverify_core::state::State> {
+    value.parse().map_err(|_| {
+        PyValueError::new_err("state must be an uppercase USPS state or territory code")
+    })
+}
+
+fn extract<T: DeserializeOwned>(value: &Bound<'_, PyAny>, input: &str) -> PyResult<T> {
+    let text: String = value
+        .py()
+        .import("json")?
+        .call_method1("dumps", (value,))?
+        .extract()?;
+    decode(&text, input)
+}
+
+fn output<T: Serialize>(py: Python<'_>, value: T) -> PyResult<Bound<'_, PyAny>> {
+    let json = serde_json::to_string(&value)
+        .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("could not encode result"))?;
+    py.import("json")?.call_method1("loads", (json,))
+}
 
 /// An evaluation failure reduced to plain data, so it can cross threads before becoming a `PyErr`.
 struct Failure {
@@ -121,5 +172,9 @@ fn _medverify(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<MedVerifyEngine>()?;
     module.add_class::<ClaimLine>()?;
     module.add_class::<ModifierEvidence>()?;
+    module.add_function(wrap_pyfunction!(demo::_demo_engine, module)?)?;
+    module.add_function(wrap_pyfunction!(demo::_demo_documents, module)?)?;
+    wiser::register(module)?;
+    fhir_pas::register(module)?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))
 }

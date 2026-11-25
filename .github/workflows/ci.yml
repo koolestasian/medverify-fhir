@@ -136,7 +136,7 @@ jobs:
       - run: uv run --locked maturin develop --release
       - run: uv run --locked pytest -q
       - run: uv run --locked mypy --strict python/
-      - run: uv run --locked python -m mypy.stubtest medverify._medverify
+      - run: uv run --locked python -m mypy.stubtest medverify._medverify medverify.wiser medverify.fhir_pas
       - run: >-
           uv run --locked mypy --strict scripts/sandbox_common.py scripts/fetch_sandbox.py scripts/seed_hapi.py
           scripts/check_reset.py scripts/run_inferno.py scripts/inspect_release.py
@@ -162,7 +162,7 @@ jobs:
       - name: Bindings on CPython 3.14t
         env:
           UV_PROJECT_ENVIRONMENT: .venv-ft
-        run: uv run --locked --python 3.14t pytest -q tests/test_bindings.py
+        run: uv run --locked --python 3.14t pytest -q tests/test_bindings.py tests/test_policy_bindings.py
 
   sandbox:
     needs: hygiene

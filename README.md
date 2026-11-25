@@ -1,6 +1,6 @@
 # MedVerify-FHIR
 
-MedVerify-FHIR checks Medicare coding edits, Washington WISeR policy, and Da Vinci Prior Authorization Support (PAS) transactions. The Rust core provides all three checks. The typed Python API exposes the Medicare coding edit evaluators and is tested on CPython 3.14 and free-threaded 3.14t.
+MedVerify-FHIR checks Medicare coding edits, Washington WISeR policy, and Da Vinci Prior Authorization Support (PAS) transactions. All three are available in Rust and through the typed Python API, which is tested on CPython 3.14 and free-threaded 3.14t.
 
 - **NCCI** evaluates procedure-to-procedure (PTP) and medically unlikely edits (MUE) against immutable indexes. The included dataset has 120 synthetic procedures.
 - **Washington WISeR** checks prior authorization and pre-payment review routing, epidural injection and cervical fusion criteria, tracking numbers, and provider exemptions. The bundled policy uses synthetic procedure mappings. Load an authorized table for actual codes with `wiser::Policy::from_toml`. [Bundled policy](policy/wa_wiser.toml)
@@ -8,14 +8,19 @@ MedVerify-FHIR checks Medicare coding edits, Washington WISeR policy, and Da Vin
 
 ## Quickstart
 
+After installing the wheel, run `medverify demo` from any directory. The demo runs four synthetic checks offline, verifies a repaired control for each, and prints measured check times. From a checkout, run it with `python -m uv run --locked medverify demo`.
+
 From the repository root, use stable Rust with a native linker, CPython 3.11 or later, and uv installed as a Python module. Run these commands in Bash, or Git Bash on Windows, to build the synthetic indexes and check one line against its unit limit.
 
 ```sh
-cargo run --locked -p medverify-core --bin medverify-index -- synthetic --data data --out target/synthetic
-python -m uv run --locked python - <<'PY'
+work=$(mktemp -d)
+cargo run --locked -p medverify-core --bin medverify-index -- synthetic --data data --out "$work/index"
+python -m uv run --locked python - "$work/index" <<'PY'
+import sys
+
 from medverify import ClaimLine, MedVerifyEngine
 
-engine = MedVerifyEngine("target/synthetic")
+engine = MedVerifyEngine(sys.argv[1])
 line = ClaimLine(
     id=1, beneficiary="patient-a", billing_provider="provider-a",
     date="2026-10-01", setting="practitioner", code="Y9011", units=4,
@@ -32,6 +37,24 @@ MAI 1 applies the unit limit to each line. Pass `claim_id` when the claim is kno
 The evaluator reports `unsupported_split` for an unsupported additional line on a known claim and `possible_unsupported_split` when an unsupported line may be part of a split and its claim ID is unknown. Both are coding-review findings. A line over its own unit limit receives a separate `claim_line` finding.
 
 Rust callers can open the generated files with `MmapPtpIndex::open` and `MmapMueIndex::open` and pass `claim::ClaimLine` records to `ncci::evaluate` and `mue::evaluate`. `write_ptp` produces format version 2, which adds a directory of column-one codes so a lookup searches only that code's rows. Version 1 PTP files still open.
+
+## Python policy API
+
+### Washington WISeR
+
+`medverify.wiser.Policy.washington_synthetic()` loads the bundled policy with synthetic procedure mappings. To supply authorized mappings, use `Policy.from_toml(text)`. The policy exposes service routing, gold-card eligibility, and associated denials. The module also provides `evaluate_esi`, `evaluate_fusion`, and `validate_utn`.
+
+### Da Vinci Prior Authorization Support
+
+Pass FHIR R4 JSON text to `medverify.fhir_pas.validate_request(document)`. It returns an owned request handle that `validate_response(document, request)` uses to correlate the response. The module also validates subscriptions, notifications, and inquiry modes. Validation errors raise `ValueError` with a validator error code.
+
+For review-action reason codes, supply the allowed codes from your licensed X12 external code list 886 as `decision_reason_codes` to `validate_response`. A response with a reason code raises `TerminologyUnavailable` if the list is missing. A denied item can satisfy the reason requirement with a valid line-linked `processNote`.
+
+Use `Timeline.assess_item` to assess a notice against a validated request item. Supply receipt time with a named time zone, such as `2026-03-06T09:00:00-08:00[America/Los_Angeles]`, so standard deadlines use the local calendar across daylight saving changes. Drug, payer, date, and service classification exclusions are evaluated first.
+
+Structured urgency establishes the minimum clock. HL7 `stat` or X12 `U` sets an expedited minimum. X12 level of service `03` reports `emergency`. A coded `normal` or `deferred` request can be `undetermined` when priority or supporting information includes narrative, documents, or other content the validator does not interpret. For an in-scope item, supply `determined_priority` after reviewing an undetermined request or establishing that a clock applies to an emergency request. `Timeline.assess` evaluates the configured clock directly without request context.
+
+`ReviewerPolicy.state_rules()` loads the bundled reviewer requirements. Use uppercase USPS codes in reviewer contexts and WISeR services.
 
 ## Licensed CMS tables
 
@@ -90,7 +113,7 @@ The seed loads 50 synthetic Washington patients from Synthea with fixed seeds an
 | PAS test-only control routes | `http://127.0.0.1:18085/admin/` | `MEDVERIFY_PAS_PORT` |
 | Inferno CRD, DTR and PAS APIs | `http://127.0.0.1:14567`, `14568` and `14569` | `MEDVERIFY_INFERNO_CRD_PORT`, `_DTR_PORT`, `_PAS_PORT` |
 
-Every port binds to 127.0.0.1. The PAS control routes exist only for unattended Inferno runs; the server refuses them through the proxy. To run a second, disposable stack beside an existing one, set `COMPOSE_PROJECT_NAME` and a different value for every port variable before running the commands above; seed and reset records are kept per project under `.cache/sandbox/`.
+Every port binds to 127.0.0.1. The PAS control routes support unattended Inferno runs. The server refuses control requests through the proxy. To run a second, disposable stack beside an existing one, set `COMPOSE_PROJECT_NAME` and a different value for every port variable before running the commands above; seed and reset records are kept per project under `.cache/sandbox/`.
 
 These suites exercise the sandbox payer servers. MedVerify's own PAS 2.2.1 validator is tested by `cargo test`. `bash scripts/check_sdist.sh` proves the source distribution builds and installs on its own.
 
