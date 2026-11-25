@@ -8,13 +8,15 @@ use findings::Findings;
 use line::{ClaimLine, ModifierEvidence};
 use medverify_core::claim::EvaluationError;
 use medverify_core::index::{MmapMueIndex, MmapPtpIndex};
+use medverify_core::receipt::{Receipt, MAX_PUBLIC_KEY_BYTES, MAX_RECEIPT_BYTES};
 use medverify_core::{mue, ncci};
 use pyo3::exceptions::{PyOverflowError, PyValueError};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use serde::{de::DeserializeOwned, Serialize};
-use std::io;
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
 
 /// Evaluates claim lines against one immutable pair of NCCI indexes.
 #[pyclass(frozen, module = "medverify._medverify")]
@@ -174,7 +176,29 @@ fn _medverify(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ModifierEvidence>()?;
     module.add_function(wrap_pyfunction!(demo::_demo_engine, module)?)?;
     module.add_function(wrap_pyfunction!(demo::_demo_documents, module)?)?;
+    module.add_function(wrap_pyfunction!(_verify_receipt, module)?)?;
     wiser::register(module)?;
     fhir_pas::register(module)?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))
+}
+
+fn read_bounded(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    File::open(path)?
+        .take((limit + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+#[pyfunction]
+fn _verify_receipt(py: Python<'_>, file: PathBuf, public_key: PathBuf) -> PyResult<()> {
+    py.detach(|| {
+        let document = read_bounded(&file, MAX_RECEIPT_BYTES)
+            .map_err(|_| PyValueError::new_err("could not read receipt file"))?;
+        let key = read_bounded(&public_key, MAX_PUBLIC_KEY_BYTES)
+            .map_err(|_| PyValueError::new_err("could not read public key file"))?;
+        Receipt::verify_json(&document, &key)
+            .map(|_| ())
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    })
 }

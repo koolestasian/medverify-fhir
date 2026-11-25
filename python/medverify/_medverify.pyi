@@ -19,6 +19,7 @@ __all__ = [
     "__version__",
     "_demo_documents",
     "_demo_engine",
+    "_verify_receipt",
     "evaluate_esi",
     "evaluate_fusion",
     "validate_inquiry",
@@ -32,6 +33,9 @@ __version__: str
 
 def _demo_engine(index_dir: str | PathLike[str]) -> MedVerifyEngine: ...
 def _demo_documents() -> tuple[str, str]: ...
+def _verify_receipt(
+    file: str | PathLike[str], public_key: str | PathLike[str]
+) -> None: ...
 
 @final
 class ModifierEvidence:

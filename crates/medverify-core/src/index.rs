@@ -454,6 +454,7 @@ pub fn write_mue(
 
 pub struct MappedIndex<R> {
     map: Mmap,
+    wire: Option<Mmap>,
     mode: CatalogMode,
     version: u16,
     directory_len: usize,
@@ -466,6 +467,13 @@ pub type MmapPtpIndex = MappedIndex<NcciPtpRecord>;
 pub type MmapMueIndex = MappedIndex<MueRecord>;
 
 impl<R: Pod> MappedIndex<R> {
+    pub(crate) fn file_bytes(&self) -> &[u8] {
+        if let Some(wire) = &self.wire {
+            return wire;
+        }
+        &self.map
+    }
+
     pub fn records(&self) -> &[R] {
         bytemuck::cast_slice(&self.map[self.records_offset..])
     }
@@ -573,6 +581,10 @@ fn check_directory<R: Record>(directory: &[PtpDirectoryEntry], rows: &[R]) -> io
 }
 
 fn open<R: Record>(path: &Path) -> io::Result<MappedIndex<R>> {
+    open_with_wire_copy(path, cfg!(target_endian = "big"))
+}
+
+fn open_with_wire_copy<R: Record>(path: &Path, keep_wire: bool) -> io::Result<MappedIndex<R>> {
     let mut file = File::open(path)?;
     let length = file.metadata()?.len();
     let mut h = [0; HEADER];
@@ -630,11 +642,18 @@ fn open<R: Record>(path: &Path) -> io::Result<MappedIndex<R>> {
     if Sha256::digest(&map[HEADER..])[..] != h[32..] {
         return Err(invalid("index payload SHA-256 mismatch"));
     }
-    // Records are stored little-endian; decoding in place gives native records on any target.
-    for chunk in map[records_offset..].as_chunks_mut::<ROW>().0 {
-        let row = R::decode(chunk);
-        chunk.copy_from_slice(bytemuck::bytes_of(&row));
-    }
+    // On big-endian targets, retain the exact file bytes before decoding the native view.
+    let wire = if keep_wire {
+        let mut wire = MmapMut::map_anon(size)?;
+        wire.copy_from_slice(&map);
+        for chunk in map[records_offset..].as_chunks_mut::<ROW>().0 {
+            let row = R::decode(chunk);
+            chunk.copy_from_slice(bytemuck::bytes_of(&row));
+        }
+        Some(wire.make_read_only()?)
+    } else {
+        None
+    };
     let rows: &[R] = bytemuck::cast_slice(&map[records_offset..]);
     let mut validator = Validator::new(mode);
     for at in 0..rows.len() {
@@ -660,6 +679,7 @@ fn open<R: Record>(path: &Path) -> io::Result<MappedIndex<R>> {
         .then(|| PairFilter::from_sorted(bytemuck::cast_slice(&map[records_offset..])));
     Ok(MappedIndex {
         map: map.make_read_only()?,
+        wire,
         mode,
         version,
         directory_len,
@@ -672,6 +692,87 @@ fn open<R: Record>(path: &Path) -> io::Result<MappedIndex<R>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn receipt_digest_uses_wire_bytes_when_native_view_differs() {
+        use crate::encoding::encode_code_b36;
+        use crate::receipt::{Receipt, ReceiptIndexes, SigningKey};
+
+        // Simulate an endian conversion even on little-endian test hosts.
+        fn simulate_conversion<R>(index: &mut MappedIndex<R>) {
+            let mut native = MmapMut::map_anon(index.map.len()).unwrap();
+            let wire = index.wire.as_ref().unwrap();
+            native.copy_from_slice(wire);
+            for entry in native[HEADER..index.records_offset]
+                .as_chunks_mut::<ENTRY>()
+                .0
+            {
+                for field in entry.as_chunks_mut::<4>().0 {
+                    field.reverse();
+                }
+            }
+            for row in native[index.records_offset..].as_chunks_mut::<ROW>().0 {
+                row[..4].reverse();
+            }
+            assert_ne!(&native[..], &wire[..]);
+            index.map = native.make_read_only().unwrap();
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let ptp_path = directory.path().join("ptp.bin");
+        let mue_path = directory.path().join("mue.bin");
+        let first = encode_code_b36("Y9011").unwrap();
+        write_ptp(
+            File::create(&ptp_path).unwrap(),
+            CatalogMode::Synthetic,
+            vec![NcciPtpRecord {
+                col1_b36: first,
+                col2_b36: encode_code_b36("Y9012").unwrap(),
+                eff_days: 0,
+                del_days: NO_DELETION_DATE,
+                setting_flags: 1,
+                ccmi: 0,
+                rationale_id: 0,
+                flags: 0,
+            }],
+        )
+        .unwrap();
+        write_mue(
+            File::create(&mue_path).unwrap(),
+            CatalogMode::Synthetic,
+            vec![MueRecord {
+                code_b36: first,
+                max_units: 3,
+                eff_days: 0,
+                del_days: NO_DELETION_DATE,
+                setting_flags: 1,
+                mai: 1,
+                rationale_id: 0,
+                flags: 0,
+                reserved: 0,
+            }],
+        )
+        .unwrap();
+
+        let mut framed = b"MedVerify index bundle v1\0".to_vec();
+        for path in [&ptp_path, &mue_path] {
+            let bytes = std::fs::read(path).unwrap();
+            framed.extend((bytes.len() as u64).to_be_bytes());
+            framed.extend(bytes);
+        }
+        let expected = hex::encode(Sha256::digest(framed));
+
+        let mut ptp = open_with_wire_copy(&ptp_path, true).unwrap();
+        let mut mue = open_with_wire_copy(&mue_path, true).unwrap();
+        simulate_conversion(&mut ptp);
+        simulate_conversion(&mut mue);
+        let indexes = ReceiptIndexes::new(&ptp, &mue).unwrap();
+        let (receipt, _) =
+            Receipt::issue_ncci(&indexes, &[], &SigningKey::from_bytes(&[42; 32])).unwrap();
+        let document: serde_json::Value =
+            serde_json::from_str(&receipt.to_json().unwrap()).unwrap();
+        assert_eq!(document["payload"]["index_digest"], expected);
+    }
 
     fn keys(n: usize, seed: u64) -> impl Iterator<Item = (u32, u32, u8)> {
         let mut state = seed;

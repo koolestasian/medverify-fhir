@@ -4,7 +4,7 @@ use std::fmt;
 use std::num::NonZeroU64;
 use time::Date;
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
 pub struct ProcedureCode(pub(crate) u32);
 
 impl ProcedureCode {
@@ -17,7 +17,7 @@ impl ProcedureCode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
 pub struct ServiceDate(pub(crate) u16);
 
 impl ServiceDate {
@@ -31,14 +31,14 @@ impl ServiceDate {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
 pub enum Setting {
     Practitioner = 1,
     HospitalOutpatient = 2,
     DmeSupplier = 4,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
 pub struct ServiceDay<'a> {
     pub beneficiary: &'a str,
     pub billing_provider: &'a str,
@@ -46,13 +46,13 @@ pub struct ServiceDay<'a> {
     pub setting: Setting,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
 pub enum ServiceKind {
     EvaluationAndManagement,
     Other,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
 pub struct Modifier(pub(crate) [u8; 2]);
 
 impl Modifier {
@@ -70,7 +70,7 @@ impl Modifier {
 }
 
 /// Clinical or coding facts verified by the caller for a specific line pair.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub enum EvidenceBasis {
     AnatomicSite,
     UnrelatedPostoperativeEm,
@@ -93,14 +93,14 @@ pub enum EvidenceBasis {
     RepeatProcedureOtherPractitioner,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct ModifierEvidence {
     pub related_line_id: u64,
     pub modifier: Modifier,
     pub basis: EvidenceBasis,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct ClaimLine<'a> {
     /// Unique within the service-day group, including when evaluating multiple claims.
     pub id: u64,

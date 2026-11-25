@@ -11,6 +11,11 @@ allow = [
     "Unicode-3.0",
     "Zlib",
 ]
+exceptions = [
+    { allow = ["BSD-3-Clause"], crate = "curve25519-dalek" },
+    { allow = ["BSD-3-Clause"], crate = "ed25519-dalek" },
+    { allow = ["BSD-3-Clause"], crate = "subtle" },
+]
 
 [bans]
 multiple-versions = "warn"

@@ -503,10 +503,11 @@ pub enum ReviewError {
     ProhibitedAutomation,
 }
 
+pub(crate) const REVIEWER_POLICY_TOML: &str = include_str!("../../../../policy/state_hitl.toml");
+
 impl ReviewerPolicy {
     pub fn state_rules() -> Self {
-        Self::from_toml(include_str!("../../../../policy/state_hitl.toml"))
-            .expect("bundled state reviewer policy")
+        Self::from_toml(REVIEWER_POLICY_TOML).expect("bundled state reviewer policy")
     }
 
     pub fn from_toml(input: &str) -> Result<Self, toml::de::Error> {

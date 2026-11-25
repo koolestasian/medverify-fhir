@@ -7,7 +7,7 @@ use crate::index::MmapMueIndex;
 use std::collections::BTreeMap;
 
 /// A resulting denial can be appealed for all three adjudication indicators.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub enum MueScope<'a> {
     ClaimLine {
         line_id: u64,
@@ -27,7 +27,7 @@ pub enum MueScope<'a> {
     ServiceDayClinicalReview,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct MueFinding<'a> {
     pub service_day: ServiceDay<'a>,
     pub code: ProcedureCode,
@@ -85,26 +85,129 @@ pub fn evaluate<'a>(
                     }
                 }
             } else {
-                let total = lines
-                    .iter()
-                    .try_fold(0_u64, |total, line| total.checked_add(line.units.get()))
-                    .ok_or(EvaluationError::UnitTotalOverflow { service_day, code })?;
-                let scope = if edit.mai == 2 {
-                    MueScope::AbsoluteServiceDayLimit
-                } else {
-                    MueScope::ServiceDayClinicalReview
-                };
-                findings.extend(excess(
-                    service_day,
-                    edit,
-                    scope,
-                    total,
-                    lines.iter().any(|line| line.abn_liability_shift_attempted),
-                ));
+                findings.extend(service_day_excess(service_day, edit, lines)?);
             }
         }
     }
     Ok(findings)
+}
+
+fn service_day_excess<'a>(
+    service_day: ServiceDay<'a>,
+    edit: &MueRecord,
+    lines: &[&ClaimLine<'a>],
+) -> Result<Option<MueFinding<'a>>, EvaluationError<'a>> {
+    let mut total = 0_u64;
+    let mut abn_attempted = false;
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        total = total
+            .checked_add(line.units.get())
+            .ok_or(EvaluationError::UnitTotalOverflow {
+                service_day,
+                code: ProcedureCode(edit.code_b36),
+            })?;
+        abn_attempted |= line.abn_liability_shift_attempted;
+        i += 1;
+    }
+    let scope = if edit.mai == 2 {
+        MueScope::AbsoluteServiceDayLimit
+    } else {
+        MueScope::ServiceDayClinicalReview
+    };
+    Ok(excess(service_day, edit, scope, total, abn_attempted))
+}
+
+#[cfg(kani)]
+#[kani::proof]
+#[kani::unwind(20)]
+fn mue_mai2_split_and_overflow() {
+    use crate::claim::{ServiceDate, Setting};
+    use std::num::NonZeroU64;
+
+    let left_units = NonZeroU64::new(kani::any());
+    let right_units = NonZeroU64::new(kani::any());
+    kani::assume(left_units.is_some() && right_units.is_some());
+
+    let service_day = ServiceDay {
+        beneficiary: "proof-beneficiary",
+        billing_provider: "proof-provider",
+        date: ServiceDate(0),
+        setting: Setting::Practitioner,
+    };
+    let edit = MueRecord {
+        code_b36: 0,
+        max_units: kani::any(),
+        eff_days: 0,
+        del_days: crate::encoding::NO_DELETION_DATE,
+        mai: 2,
+        setting_flags: Setting::Practitioner as u8,
+        rationale_id: 0,
+        flags: 0,
+        reserved: 0,
+    };
+    let left = ClaimLine {
+        id: 1,
+        service_day,
+        code: ProcedureCode(edit.code_b36),
+        service_kind: ServiceKind::Other,
+        units: left_units.unwrap(),
+        modifiers: &[],
+        modifier_evidence: &[],
+        abn_liability_shift_attempted: kani::any(),
+        claim_id: Some("proof-claim-one"),
+    };
+    let right = ClaimLine {
+        id: 2,
+        units: right_units.unwrap(),
+        abn_liability_shift_attempted: kani::any(),
+        claim_id: Some("proof-claim-two"),
+        ..left
+    };
+    let split = service_day_excess(service_day, &edit, &[&left, &right]);
+    let total = u128::from(left.units.get()) + u128::from(right.units.get());
+    if total > u128::from(u64::MAX) {
+        kani::assert(
+            split
+                == Err(EvaluationError::UnitTotalOverflow {
+                    service_day,
+                    code: left.code,
+                }),
+            "MAI 2 reports overflow for sums above u64::MAX",
+        );
+    } else {
+        let merged = ClaimLine {
+            units: NonZeroU64::new(total as u64).unwrap(),
+            abn_liability_shift_attempted: left.abn_liability_shift_attempted
+                || right.abn_liability_shift_attempted,
+            ..left
+        };
+        kani::assert(
+            split == service_day_excess(service_day, &edit, &[&merged]),
+            "MAI 2 returns the same finding after a unit-preserving split",
+        );
+        let Ok(finding) = split else {
+            kani::assert(
+                false,
+                "a representable sum does not return an evaluation error",
+            );
+            return;
+        };
+        if let Some(finding) = finding {
+            kani::assert(
+                finding.scope == MueScope::AbsoluteServiceDayLimit
+                    && finding.total_units == total as u64
+                    && total > u128::from(edit.max_units),
+                "MAI 2 findings record an exact total above the day limit",
+            );
+        } else {
+            kani::assert(
+                total <= u128::from(edit.max_units),
+                "MAI 2 has no finding when the total is within the day limit",
+            );
+        }
+    }
 }
 
 fn finding<'a>(

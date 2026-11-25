@@ -70,6 +70,16 @@ The compiler discards descriptor and rationale text. Field errors identify the m
 
 Run `medverify-index verify-licensed DIR PTP_ROWS MUE_ROWS` to validate a published pair. The production loader checks both files, and the command requires the licensed catalog, PTP format version 2, MUE format version 1, and the supplied row counts.
 
+## Signed receipts
+
+Rust callers can issue Ed25519-signed receipts for NCCI evaluations. A receipt contains index and policy digests, commitments to the claim and its findings, and a list of finding codes. The original claim, detailed findings, and secret nonce stay with the operator. Use the installed CLI to verify the signature offline with a public key obtained independently of the receipt.
+
+```sh
+medverify verify-receipt receipt.json --public-key public.key
+```
+
+[Receipt format and operator workflow](docs/RECEIPTS.md)
+
 ## Tests and benchmarks
 
 ```sh
@@ -79,7 +89,7 @@ python -m uv run --locked pytest -q
 
 The Rust benchmarks measure pair lookup, ten-line claim evaluation, and WISeR routing with PAS validation. The scale benchmark runs PTP and MUE evaluation against a synthetic catalog with 4,506,527 PTP rows. [Workloads and measured results](BENCHMARKS.md)
 
-Open a pull request against `main` and wait for the applicable CI jobs to pass. Documentation-only PRs run repository hygiene and secret scanning. Code changes also run the Rust and Python jobs. Changes to FHIR or payer policy, sandbox files, CI, build manifests, or lockfiles also run the sandbox and Inferno suites.
+Open a pull request against `main` and wait for the applicable CI jobs to pass. Documentation-only changes run repository hygiene and secret scanning. Code changes also run Rust tests, Python tests, and [four Kani proofs](docs/VERIFICATION.md) covering code encoding, PTP modifier handling, MUE service-day totals, and WISeR tracking numbers. Changes to FHIR or payer policy, sandbox files, CI, build manifests, or lockfiles also run the sandbox and Inferno suites.
 
 Before tagging a release, use **Actions → CI → Run workflow** on `main`. Confirm that the run tested the commit you intend to tag and that all jobs passed.
 
