@@ -1,4 +1,5 @@
 use super::{Action, RequestItem};
+pub use crate::state::State;
 use jiff::civil::{date, Date};
 use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,36 @@ pub enum ServiceKind {
 pub enum Priority {
     Standard,
     Expedited,
+}
+
+/// The urgency a PAS request asks for, as far as its structured data states it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestPriority {
+    /// HL7 process priority `normal` or `deferred`, with no urgent level of service, and nothing
+    /// else in Claim.priority or Claim.supportingInfo that the verifier does not read.
+    Standard,
+    /// HL7 process priority `stat`, or the X12 urgent level of service `U`.
+    Expedited,
+    /// The X12 emergency level of service `03`. Emergency services are covered regardless of
+    /// prior authorization (42 CFR 422.113(b)(2)(ii)), so whether a prior-authorization clock
+    /// applies is the caller's determination.
+    Emergency,
+    /// No HL7 process priority code, or `normal`/`deferred` beside content the verifier does not
+    /// read: text, extensions or another coding in Claim.priority, or narrative or documents in
+    /// Claim.supportingInfo. That content may carry a physician's indication that the standard
+    /// timeframe could seriously jeopardize the enrollee's health, which requires an expedited
+    /// decision (42 CFR 422.570(c)(2)(ii)). The verifier does not interpret free text.
+    Undetermined,
+}
+
+impl From<Priority> for RequestPriority {
+    fn from(priority: Priority) -> Self {
+        match priority {
+            Priority::Standard => Self::Standard,
+            Priority::Expedited => Self::Expedited,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -178,6 +209,15 @@ pub enum TimingError {
     InvalidExtension,
     MissingExtensionNotice,
     DateOverflow,
+    /// An expedited request was assessed against the standard clock.
+    PriorityDowngrade,
+    /// The request's priority is undetermined; the caller must determine it first.
+    PriorityUndetermined,
+    /// The request has the X12 emergency level of service; the caller must establish that a
+    /// prior-authorization clock applies, and which one, first.
+    EmergencyLevelOfService,
+    /// A determination was supplied for a request whose priority is already coded.
+    PriorityAlreadyCoded,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -217,9 +257,46 @@ impl Timeline<'_> {
         classify: impl Fn(&str, &str) -> Option<ServiceKind>,
         event: Option<CommunicatedAction>,
     ) -> Result<Timeliness, TimingError> {
-        self.assess(item.service_kind(classify), event)
+        self.assess_determined_item(item, None, classify, event)
     }
 
+    /// [`Timeline::assess_item`] with the caller's priority determination, if any. Whether the
+    /// deadline rule applies is decided first: a drug, payer or effective-date exclusion (or an
+    /// unclassified service) is reported as such whatever determination accompanies it, because
+    /// there is no clock for it to resolve. Only for an item within the rule is the determination
+    /// applied, with [`RequestItem::determine`]'s protections against replacing a coded priority
+    /// or lowering a coded `stat`.
+    pub fn assess_determined_item(
+        self,
+        item: RequestItem<'_>,
+        determined: Option<Priority>,
+        classify: impl Fn(&str, &str) -> Option<ServiceKind>,
+        event: Option<CommunicatedAction>,
+    ) -> Result<Timeliness, TimingError> {
+        let kind = item.service_kind(classify);
+        // Items the deadline rule excludes keep their exclusion; there is no clock to check.
+        let scope = self.payer.timing_scope(self.received.date(), kind)?;
+        if scope != TimingScope::Applies {
+            return Ok(Timeliness::OutsideScope(scope));
+        }
+        let item = match determined {
+            Some(priority) => item.determine(priority)?,
+            None => item,
+        };
+        match item.priority() {
+            // No timing verdict on a clock the request's own data cannot support.
+            RequestPriority::Undetermined => Err(TimingError::PriorityUndetermined),
+            RequestPriority::Emergency => Err(TimingError::EmergencyLevelOfService),
+            // A payer may expedite a standard request, but must not relax an expedited one.
+            RequestPriority::Expedited if self.priority == Priority::Standard => {
+                Err(TimingError::PriorityDowngrade)
+            }
+            RequestPriority::Expedited | RequestPriority::Standard => self.assess(kind, event),
+        }
+    }
+
+    /// Assess the clock in `self` alone. This takes no request, so it applies none of the
+    /// request-priority checks in [`Timeline::assess_item`]; use that for a validated request.
     pub fn assess(
         self,
         kind: Option<ServiceKind>,
@@ -333,7 +410,7 @@ pub enum Qualification {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewerRule {
-    pub state: String,
+    pub state: State,
     #[serde(deserialize_with = "parse_date")]
     pub effective: Date,
     #[serde(default, deserialize_with = "parse_optional_date")]
@@ -371,8 +448,8 @@ pub struct ReviewerPolicy {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct ReviewContext<'a> {
-    pub state: &'a str,
+pub struct ReviewContext {
+    pub state: State,
     pub plan: Plan,
     pub on: Date,
     pub issued_or_renewed: Option<Date>,
@@ -437,10 +514,10 @@ impl ReviewerPolicy {
         Ok(Self { rules: table.rule })
     }
 
-    pub fn applicable_rules<'a>(
-        &'a self,
-        context: ReviewContext<'_>,
-    ) -> Result<Vec<&'a ReviewerRule>, ReviewError> {
+    pub fn applicable_rules(
+        &self,
+        context: ReviewContext,
+    ) -> Result<Vec<&ReviewerRule>, ReviewError> {
         let mut matches = Vec::new();
         for rule in self.rules.iter().filter(|rule| {
             rule.state == context.state
@@ -466,7 +543,7 @@ impl ReviewerPolicy {
 
     pub fn verify(
         &self,
-        context: ReviewContext<'_>,
+        context: ReviewContext,
         automation: Automation,
         reviewer: Option<ReviewerEvidence>,
     ) -> Result<(), ReviewError> {

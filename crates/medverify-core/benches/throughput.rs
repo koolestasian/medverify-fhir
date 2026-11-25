@@ -153,7 +153,7 @@ fn throughput(c: &mut Criterion) {
 
     let policy = wiser::Policy::washington_synthetic();
     let service = wiser::Service {
-        state: "WA",
+        state: wiser::State::WA,
         plan: wiser::Plan::OriginalMedicare,
         site: wiser::Site::Office,
         date,

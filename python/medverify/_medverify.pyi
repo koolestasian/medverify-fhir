@@ -1,4 +1,5 @@
 from collections.abc import Callable, Sequence
+from collections.abc import Set as AbstractSet
 from os import PathLike
 from typing import final
 
@@ -99,7 +100,7 @@ class ValidatedRequest:
     @property
     def sequences(self) -> list[int]: ...
     @property
-    def priority(self) -> pas.Priority: ...
+    def priority(self) -> pas.RequestPriority: ...
 
 @final
 class Response:
@@ -115,6 +116,7 @@ def validate_response(
     request: ValidatedRequest,
     *,
     additional_information_requested: Sequence[int] | None = None,
+    decision_reason_codes: AbstractSet[str] | None = None,
 ) -> Response: ...
 def validate_subscription(document: str, sending_systems: Sequence[str]) -> None: ...
 def validate_inquiry(inquiry: pas.Inquiry) -> None: ...
@@ -141,6 +143,7 @@ class Timeline:
         | tuple[tuple[str, str, pas.ServiceKind], ...]
         | None = None,
         event: pas.CommunicatedAction | None = None,
+        determined_priority: pas.Priority | None = None,
     ) -> pas.Timeliness: ...
 
 @final

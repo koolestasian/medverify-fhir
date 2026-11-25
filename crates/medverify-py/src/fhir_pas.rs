@@ -1,4 +1,4 @@
-use crate::{decode, extract, output};
+use crate::{decode_document, extract, output, state};
 use jiff::{civil::Date, Timestamp, Zoned};
 use medverify_core::fhir_pas as core;
 use pyo3::{
@@ -6,7 +6,7 @@ use pyo3::{
     prelude::*,
 };
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 #[pyclass(frozen, module = "medverify.fhir_pas")]
 struct ValidatedRequest(core::Request<'static>);
@@ -52,22 +52,30 @@ fn validation_error(error: core::Error) -> PyErr {
 #[pyfunction]
 fn validate_request(py: Python<'_>, document: String) -> PyResult<ValidatedRequest> {
     py.detach(move || {
-        let value = decode(&document, "FHIR JSON")?;
+        let value = decode_document(&document)?;
         let request = core::validate_request(&value).map_err(validation_error)?;
         Ok(ValidatedRequest(request.into_owned()))
     })
 }
 
+/// `decision_reason_codes` is the operator's licensed X12 external code list 886. Without it, a
+/// response carrying any review action reasonCode raises `TerminologyUnavailable(...)`.
 #[pyfunction]
-#[pyo3(signature = (document, request, *, additional_information_requested=None))]
+#[pyo3(signature = (document, request, *, additional_information_requested=None, decision_reason_codes=None))]
 fn validate_response(
     py: Python<'_>,
     document: String,
     request: &ValidatedRequest,
     additional_information_requested: Option<Vec<u32>>,
+    decision_reason_codes: Option<HashSet<String>>,
 ) -> PyResult<Response> {
     py.detach(move || {
-        let value = decode(&document, "FHIR JSON")?;
+        let value = decode_document(&document)?;
+        let member = |code: &str| {
+            decision_reason_codes
+                .as_ref()
+                .is_some_and(|codes| codes.contains(code))
+        };
         core::validate_response(
             &value,
             &request.0,
@@ -75,6 +83,9 @@ fn validate_response(
                 additional_information_requested: additional_information_requested
                     .as_deref()
                     .unwrap_or_default(),
+                decision_reason_codes: decision_reason_codes
+                    .is_some()
+                    .then_some(&member as &dyn Fn(&str) -> bool),
             },
         )
         .map(Response)
@@ -89,7 +100,7 @@ fn validate_subscription(
     sending_systems: Vec<String>,
 ) -> PyResult<()> {
     py.detach(move || {
-        let value = decode(&document, "FHIR JSON")?;
+        let value = decode_document(&document)?;
         let sending_systems: Vec<_> = sending_systems.iter().map(String::as_str).collect();
         core::validate_subscription(&value, &sending_systems).map_err(validation_error)
     })
@@ -116,7 +127,7 @@ fn validate_notification(
         return Err(PyTypeError::new_err("validate_focus must be callable"));
     }
     py.detach(move || {
-        let value = decode(&document, "FHIR JSON")?;
+        let value = decode_document(&document)?;
         let mut failure = None;
         let result = core::validate_notification(&value, &subscription_reference, |focus| {
             let Some(validate) = &validate_focus else {
@@ -196,7 +207,7 @@ impl Timeline {
         timing_result(py, self.as_timeline().assess(kind, event))
     }
 
-    #[pyo3(signature = (request, sequence, *, classifications=None, event=None))]
+    #[pyo3(signature = (request, sequence, *, classifications=None, event=None, determined_priority=None))]
     fn assess_item<'py>(
         &self,
         py: Python<'py>,
@@ -204,12 +215,17 @@ impl Timeline {
         sequence: u32,
         classifications: Option<&Bound<'_, PyAny>>,
         event: Option<&Bound<'_, PyAny>>,
+        determined_priority: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let item = request
             .0
             .items()
             .find(|item| item.sequence == sequence)
             .ok_or_else(|| PyValueError::new_err("unknown request item sequence"))?;
+        // Parsed here, applied in Rust only once the item is known to be within the timing rule.
+        let determined_priority = determined_priority
+            .map(|priority| extract(priority, "PAS determined priority"))
+            .transpose()?;
         let classifications: Vec<(String, String, core::ServiceKind)> = classifications
             .map(|value| extract(value, "PAS service classifications"))
             .transpose()?
@@ -230,8 +246,9 @@ impl Timeline {
             .transpose()?;
         timing_result(
             py,
-            self.as_timeline().assess_item(
+            self.as_timeline().assess_determined_item(
                 item,
+                determined_priority,
                 |system, code| by_code.get(&(system, code)).copied(),
                 event,
             ),
@@ -252,16 +269,16 @@ struct ReviewContext {
 }
 
 impl ReviewContext {
-    fn as_context(&self) -> core::ReviewContext<'_> {
-        core::ReviewContext {
-            state: &self.state,
+    fn as_context(&self) -> PyResult<core::ReviewContext> {
+        Ok(core::ReviewContext {
+            state: state(&self.state)?,
             plan: self.plan,
             on: self.on,
             issued_or_renewed: self.issued_or_renewed,
             decision: self.decision,
             basis: self.basis,
             specialty: self.specialty,
-        }
+        })
     }
 }
 
@@ -290,7 +307,7 @@ impl ReviewerPolicy {
         let context: ReviewContext = extract(context, "PAS review context")?;
         let rules = self
             .0
-            .applicable_rules(context.as_context())
+            .applicable_rules(context.as_context()?)
             .map_err(|error| PyValueError::new_err(format!("{error:?}")))?;
         output(py, rules)
     }
@@ -308,7 +325,7 @@ impl ReviewerPolicy {
             .map(|value| extract(value, "PAS reviewer evidence"))
             .transpose()?;
         self.0
-            .verify(context.as_context(), automation, reviewer)
+            .verify(context.as_context()?, automation, reviewer)
             .map_err(|error| PyValueError::new_err(format!("{error:?}")))
     }
 }

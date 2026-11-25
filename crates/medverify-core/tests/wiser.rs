@@ -8,7 +8,7 @@ fn code(value: &str) -> ProcedureCode {
 
 fn service(value: &str) -> Service<'static> {
     Service {
-        state: "WA",
+        state: State::WA,
         plan: Plan::OriginalMedicare,
         site: Site::Office,
         date: date!(2026 - 07 - 06),
@@ -76,7 +76,7 @@ fn routing_respects_dates_plan_state_indications_and_claim_decision() {
     let category = Category::HypoglossalNerveStimulation;
     for excluded in [
         Service {
-            state: "AZ",
+            state: State::AZ,
             ..service
         },
         Service {

@@ -2,6 +2,7 @@ from typing import Literal, NotRequired, TypedDict
 
 Action = Literal["approved", "denied", "pending", "modified", "cancelled"]
 Priority = Literal["standard", "expedited"]
+RequestPriority = Literal["standard", "expedited", "emergency", "undetermined"]
 ServiceKind = Literal["medical", "drug"]
 Inquiry = Literal["manual", "automated_polling"]
 Plan = Literal[

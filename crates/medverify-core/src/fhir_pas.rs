@@ -15,6 +15,10 @@ const PAS: &str = "http://hl7.org/fhir/us/davinci-pas/StructureDefinition/";
 const BACKPORT: &str = "http://hl7.org/fhir/uv/subscriptions-backport/StructureDefinition/";
 const ACTION_SYSTEM: &str = "https://codesystem.x12.org/005010/306";
 const TOPIC: &str = "http://hl7.org/fhir/us/davinci-pas/SubscriptionTopic/PASSubscriptionTopic";
+const PROCESS_PRIORITY: &str = "http://terminology.hl7.org/CodeSystem/processpriority";
+/// X12278ReviewDecisionReasonCode (PAS 2.2.1) includes every code of this X12 external code list
+/// and nothing else. The list is licensed by X12 and not published with PAS.
+const REVIEW_REASON_SYSTEM: &str = "https://codesystem.x12.org/external/886";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -33,6 +37,9 @@ pub enum Error {
     Modification,
     Subscription,
     Notification,
+    /// A code needs a value set whose members are not published with PAS. Code membership
+    /// cannot be confirmed without the operator's licensed terminology, so no verdict is given.
+    TerminologyUnavailable(&'static str),
 }
 
 impl fmt::Display for Error {
@@ -94,8 +101,115 @@ fn codings(value: &Value) -> impl Iterator<Item = (&str, &str)> {
     })
 }
 
+/// A CodeableConcept under a required binding: the concept SHALL come from the value set, and
+/// membership needs a system and code. Text alone does not conform.
 fn concept(value: &Value) -> bool {
-    codings(value).next().is_some() || required_text(&value["text"]).is_some()
+    open_concept(value) && codings(value).next().is_some()
+}
+
+/// A CodeableConcept under an example or extensible binding: any R4 content satisfies it (ele-1),
+/// whether codings, text or extensions. Only the R4 elements count, and each must have content:
+/// an empty `extension` array, an unknown property or an `id` alone is not a concept. R4 makes
+/// Coding.system optional; `Bundle::collection` has already checked every Coding.
+fn open_concept(value: &Value) -> bool {
+    let Some(concept) = value.as_object() else {
+        return false;
+    };
+    let known = concept.iter().all(|(key, value)| match key.as_str() {
+        "id" => fhir_string(value),
+        "coding" => match_entries(value).is_some(),
+        "text" => fhir_string(value),
+        "_text" | "extension" => element_content(key, value),
+        _ => false,
+    });
+    known && concept.keys().any(|key| key != "id")
+}
+
+/// Extensions on an element (`extension`) or on a primitive (`_text`) must carry content.
+fn element_content(key: &str, value: &Value) -> bool {
+    if key == "extension" {
+        return match_entries(value).is_some_and(|entries| entries.iter().all(extension_content));
+    }
+    value.as_object().is_some_and(|element| {
+        element.keys().any(|key| key != "id")
+            && element.iter().all(|(key, value)| match key.as_str() {
+                "id" => fhir_string(value),
+                "extension" => element_content(key, value),
+                _ => false,
+            })
+    })
+}
+
+/// An R4 Extension: a url, and either one value[x] or nested extensions, never both (ext-1).
+fn extension_content(value: &Value) -> bool {
+    value.as_object().is_some_and(|extension| {
+        let values = extension
+            .iter()
+            .filter(|(key, _)| key.starts_with("value"))
+            .collect::<Vec<_>>();
+        let nested = extension.get("extension");
+        extension.get("url").and_then(required_text).is_some()
+            && nested.is_none_or(|nested| element_content("extension", nested))
+            && match (values.as_slice(), nested) {
+                ([(_, value)], None) => !value.is_null(),
+                ([], Some(_)) => true,
+                _ => false,
+            }
+    })
+}
+
+/// An R4 string: present values are never empty.
+fn fhir_string(value: &Value) -> bool {
+    value.as_str().is_some_and(|text| !text.is_empty())
+}
+
+/// R4 uses the `coding` property only for CodeableConcept.coding, a repeating element, so JSON
+/// carries it as a non-empty array; each Coding needs content beyond its id (ele-1). A malformed
+/// `coding` must fail rather than read as absent.
+fn codings_well_formed(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => values.iter().all(codings_well_formed),
+        Value::Object(object) => object.iter().all(|(key, value)| {
+            if key == "coding" {
+                match_entries(value).is_some_and(|codings| codings.iter().all(coding_well_formed))
+            } else {
+                codings_well_formed(value)
+            }
+        }),
+        _ => true,
+    }
+}
+
+/// Document-wide checks shared by every entry point (request, response, subscription and the
+/// whole notification, including its status Parameters), so a malformed element cannot pass
+/// one validator by taking a path another validator never reads.
+fn structure(value: &Value) -> Result<(), Error> {
+    if !codings_well_formed(value) {
+        return Err(Error::Profile("CodeableConcept.coding"));
+    }
+    // The extension's only context is Claim: anywhere else (an item, a ClaimResponse, another
+    // resource) it would be ignored, so it is rejected rather than read or skipped.
+    if misplaced_extension(value, &format!("{PAS}extension-levelOfServiceCode")) {
+        return Err(Error::Profile("extension-levelOfServiceCode"));
+    }
+    Ok(())
+}
+
+fn coding_well_formed(value: &Value) -> bool {
+    value.as_object().is_some_and(|coding| {
+        coding.keys().any(|key| key != "id")
+            // uri and code values carry no whitespace-only content; string values only need some.
+            && ["system", "code"].iter().all(|field| {
+                coding
+                    .get(*field)
+                    .is_none_or(|text| required_text(text).is_some())
+            })
+            && ["version", "display"]
+                .iter()
+                .all(|field| coding.get(*field).is_none_or(fhir_string))
+            && coding.get("userSelected").is_none_or(Value::is_boolean)
+            && codings_well_formed(value)
+    })
 }
 
 fn extension<'a>(value: &'a Value, base: &str, name: &str) -> Result<Option<&'a Value>, Error> {
@@ -198,6 +312,7 @@ impl<'a> Bundle<'a> {
         {
             return Err(Error::Bundle);
         }
+        structure(value)?;
         let mut entries = Vec::new();
         let mut by_url = BTreeMap::new();
         for entry in required_list(&value["entry"], "Bundle.entry")? {
@@ -419,13 +534,120 @@ fn valid_local_sequences(value: &Value, collection: &str, references: &str, item
     })
 }
 
+/// Parse R4 JSON, rejecting an object that repeats a property name.
+///
+/// FHIR R4 JSON requires unique property names. `serde_json::from_str::<Value>` keeps only the last
+/// occurrence, so a repeated `itemSequence` or `reference` would be validated as if the earlier one
+/// were absent. The error for a repeated name is a data error (`Error::is_data`) with its position;
+/// it never echoes document content.
+pub fn parse_json(text: &str) -> serde_json::Result<Value> {
+    serde_json::from_str::<UniqueProperties>(text).map(|document| document.0)
+}
+
+struct UniqueProperties(Value);
+
+impl<'de> Deserialize<'de> for UniqueProperties {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(UniqueVisitor).map(Self)
+    }
+}
+
+struct UniqueVisitor;
+
+impl<'de> serde::de::Visitor<'de> for UniqueVisitor {
+    type Value = Value;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a JSON value")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Value, E> {
+        Ok(Value::Bool(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Value, E> {
+        Ok(value.into())
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Value, E> {
+        Ok(value.into())
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Value, E> {
+        Ok(serde_json::Number::from_f64(value).map_or(Value::Null, Value::Number))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Value, E> {
+        Ok(Value::String(value.to_owned()))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Value, E> {
+        Ok(Value::String(value))
+    }
+
+    fn visit_unit<E>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
+        let mut values = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+        while let Some(UniqueProperties(value)) = seq.next_element()? {
+            values.push(value);
+        }
+        Ok(Value::Array(values))
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+        let mut object = serde_json::Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            let UniqueProperties(value) = map.next_value()?;
+            if object.insert(key, value).is_some() {
+                return Err(serde::de::Error::custom("duplicate property"));
+            }
+        }
+        Ok(Value::Object(object))
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct RequestItem<'a> {
     pub sequence: u32,
     pub product_or_service: &'a Value,
+    priority: RequestPriority,
+    /// Expedited when the request codes `stat` or the urgent level of service `U`.
+    coded_floor: Priority,
 }
 
 impl RequestItem<'_> {
+    /// Priority of the request that carries this item.
+    pub fn priority(&self) -> RequestPriority {
+        self.priority
+    }
+
+    /// Apply the caller's determination to an item whose request priority the verifier could not
+    /// resolve: an undetermined priority after reviewing the content the verifier does not read
+    /// (including any physician statement about the standard timeframe), or an emergency level of
+    /// service once the caller has established that a prior-authorization clock applies. A coded
+    /// priority cannot be replaced, and a coded `stat` beside the emergency level cannot be
+    /// determined standard. [`Timeline::assess_determined_item`] applies this only to items
+    /// within the deadline rule.
+    pub fn determine(self, priority: Priority) -> Result<Self, TimingError> {
+        match self.priority {
+            RequestPriority::Standard | RequestPriority::Expedited => {
+                Err(TimingError::PriorityAlreadyCoded)
+            }
+            RequestPriority::Undetermined | RequestPriority::Emergency
+                if priority == Priority::Standard && self.coded_floor == Priority::Expedited =>
+            {
+                Err(TimingError::PriorityDowngrade)
+            }
+            RequestPriority::Undetermined | RequestPriority::Emergency => Ok(Self {
+                priority: priority.into(),
+                ..self
+            }),
+        }
+    }
+
     /// HCPCS and other mixed code systems require the caller's dated product classification.
     pub fn service_kind(
         &self,
@@ -455,7 +677,8 @@ pub struct Request<'a> {
     patient: Party<'a>,
     insurer: Party<'a>,
     items: BTreeMap<u32, Cow<'a, Value>>,
-    priority: Priority,
+    priority: RequestPriority,
+    coded_floor: Priority,
 }
 
 struct Party<'a> {
@@ -486,10 +709,12 @@ impl<'a> Request<'a> {
             .map(|(&sequence, product_or_service)| RequestItem {
                 sequence,
                 product_or_service,
+                priority: self.priority,
+                coded_floor: self.coded_floor,
             })
     }
 
-    pub fn priority(&self) -> Priority {
+    pub fn priority(&self) -> RequestPriority {
         self.priority
     }
 
@@ -506,11 +731,142 @@ impl<'a> Request<'a> {
                 .map(|(sequence, item)| (sequence, Cow::Owned(item.into_owned())))
                 .collect(),
             priority: self.priority,
+            coded_floor: self.coded_floor,
         }
     }
 }
 
-/// Validate a PAS $submit request. R4 JSON can be parsed with serde_json before validation.
+/// Read the urgency a Claim asks for, with the floor its codes set (expedited for `stat` or `U`).
+/// Coding order carries no meaning, so within each code system every coding must be known and
+/// name the same code.
+///
+/// A coded `normal` or `deferred` gives a standard request only when nothing else in the request
+/// speaks to urgency in a form the verifier does not read. Under 42 CFR 422.570(c)(2)(ii) (and the
+/// Medicaid and CHIP equivalents) a physician's indication that the standard timeframe could
+/// seriously jeopardize the enrollee's health requires an expedited decision, whatever code the
+/// requester chose. Free text is never interpreted, so any narrative or local coding in
+/// Claim.priority, or narrative or documents in Claim.supportingInfo, leaves the priority
+/// undetermined: the caller reviews that content and determines the priority.
+fn request_priority(claim: &Value) -> Result<(RequestPriority, Priority), Error> {
+    // Claim.priority is 1..1 with an example binding (PAS 2.2.1), so any coding or text is valid.
+    // Only the R4 processpriority codes (exactly stat, normal, deferred) state an urgency here.
+    let priority = &claim["priority"];
+    if !open_concept(priority) {
+        return Err(Error::Profile("Claim.priority"));
+    }
+    let process = agreed_code(priority, PROCESS_PRIORITY, &["stat", "normal", "deferred"])
+        .ok_or(Error::Profile("Claim.priority"))?;
+    // The level of service (X12 UM06) has a required binding to 03, E and U. Absent, it means a
+    // routine level (X12 RFI 2642). It is not a turnaround flag, but urgent and emergency levels
+    // must not be assessed on the standard clock.
+    let level = match extension(claim, PAS, "extension-levelOfServiceCode")? {
+        Some(extension) => Some(
+            agreed_code(
+                &extension["valueCodeableConcept"],
+                "https://codesystem.x12.org/005010/1338",
+                &["03", "E", "U"],
+            )
+            .flatten()
+            .ok_or(Error::Profile("extension-levelOfServiceCode"))?,
+        ),
+        None => None,
+    };
+    let floor = if process == Some("stat") || level == Some("U") {
+        Priority::Expedited
+    } else {
+        Priority::Standard
+    };
+    let priority = match (process, level) {
+        (_, Some("03")) => RequestPriority::Emergency,
+        _ if floor == Priority::Expedited => RequestPriority::Expedited,
+        (Some(_), _) if !unread_priority_content(priority) && !unread_supporting_content(claim) => {
+            RequestPriority::Standard
+        }
+        // A local code, a code without a system, text, or a standard code beside content the
+        // verifier does not read: never certified as standard.
+        _ => RequestPriority::Undetermined,
+    };
+    Ok((priority, floor))
+}
+
+/// Claim.priority carries something besides its HL7 process priority codings: text, extensions,
+/// or a coding from another (or no) code system.
+fn unread_priority_content(priority: &Value) -> bool {
+    priority.as_object().is_some_and(|concept| {
+        concept
+            .keys()
+            .any(|key| !matches!(key.as_str(), "id" | "coding"))
+            || list(&priority["coding"])
+                .iter()
+                .any(|coding| coding["system"] != PROCESS_PRIORITY)
+    })
+}
+
+/// Claim.supportingInfo carries narrative or documents: text, a string value, an attachment or
+/// a reference (for example a physician's report), anywhere in an entry.
+fn unread_supporting_content(claim: &Value) -> bool {
+    fn narrative(value: &Value) -> bool {
+        match value {
+            Value::Array(values) => values.iter().any(narrative),
+            Value::Object(object) => object.iter().any(|(key, value)| {
+                matches!(
+                    key.as_str(),
+                    "text"
+                        | "_text"
+                        | "valueString"
+                        | "_valueString"
+                        | "valueMarkdown"
+                        | "valueAttachment"
+                        | "valueReference"
+                ) || narrative(value)
+            }),
+            _ => false,
+        }
+    }
+    list(&claim["supportingInfo"]).iter().any(narrative)
+}
+
+/// Whether an extension with `url` appears anywhere other than directly in a Claim's extensions.
+fn misplaced_extension(value: &Value, url: &str) -> bool {
+    match value {
+        Value::Array(values) => values.iter().any(|value| misplaced_extension(value, url)),
+        Value::Object(object) => {
+            object.get("url").and_then(Value::as_str) == Some(url)
+                || object.iter().any(|(key, child)| {
+                    if key == "extension"
+                        && object.get("resourceType") == Some(&Value::from("Claim"))
+                    {
+                        list(child).iter().any(|entry| {
+                            entry.as_object().is_some_and(|entry| {
+                                entry
+                                    .values()
+                                    .any(|nested| misplaced_extension(nested, url))
+                            })
+                        })
+                    } else {
+                        misplaced_extension(child, url)
+                    }
+                })
+        }
+        _ => false,
+    }
+}
+
+/// The single code `concept` carries from `system`, `Some(None)` without one, or `None` when such
+/// a code is unknown or the codings disagree.
+fn agreed_code<'a>(concept: &'a Value, system: &str, known: &[&str]) -> Option<Option<&'a str>> {
+    let mut agreed = None;
+    for (coding_system, code) in codings(concept) {
+        if coding_system == system
+            && (!known.contains(&code) || agreed.replace(code).is_some_and(|seen| seen != code))
+        {
+            return None;
+        }
+    }
+    Some(agreed)
+}
+
+/// Validate a PAS $submit request parsed with [`parse_json`].
 pub fn validate_request(value: &Value) -> Result<Request<'_>, Error> {
     let bundle = Bundle::collection(value, "profile-pas-request-bundle")?;
     let claim = bundle.entries[0];
@@ -583,7 +939,7 @@ pub fn validate_request(value: &Value) -> Result<Request<'_>, Error> {
         let payor = bundle.target(coverage, &payors[0], "Organization")?;
         if payors.len() != 1
             || coverage.resource["status"] != "active"
-            || !concept(&coverage.resource["relationship"])
+            || !open_concept(&coverage.resource["relationship"])
             // The memberid slice is discriminated by the MB type pattern alone; its system and
             // value are 0..1, and the official examples carry the id in Coverage.subscriberId.
             || list(&coverage.resource["identifier"])
@@ -604,19 +960,7 @@ pub fn validate_request(value: &Value) -> Result<Request<'_>, Error> {
     if focus_count != 1 {
         return Err(Error::Profile("Claim.insurance.focal"));
     }
-    let mut priority = match codings(&resource["priority"]).find_map(|(system, code)| {
-        (system == "http://terminology.hl7.org/CodeSystem/processpriority").then_some(code)
-    }) {
-        Some("stat" | "urgent" | "asap") => Priority::Expedited,
-        Some("normal") => Priority::Standard,
-        _ => return Err(Error::Profile("Claim.priority")),
-    };
-    if extension(resource, PAS, "extension-levelOfServiceCode")?.is_some_and(|level| {
-        codings(&level["valueCodeableConcept"])
-            .any(|coding| coding == ("https://codesystem.x12.org/005010/1338", "U"))
-    }) {
-        priority = Priority::Expedited;
-    }
+    let (priority, coded_floor) = request_priority(resource)?;
     for collection in ["careTeam", "diagnosis", "procedure", "supportingInfo"] {
         if let Some(array) = resource.get(collection) {
             let mut sequences = BTreeSet::new();
@@ -719,6 +1063,7 @@ pub fn validate_request(value: &Value) -> Result<Request<'_>, Error> {
         insurer: Party::from_entry(insurer),
         items,
         priority,
+        coded_floor,
     })
 }
 
@@ -741,7 +1086,7 @@ fn claim_codes(claim: &Value) -> Result<(), Error> {
             return Err(Error::Profile("Claim.procedure.procedure[x]"));
         }
         let present = match (coded, referenced) {
-            (Some(coded), None) => concept(coded),
+            (Some(coded), None) => open_concept(coded),
             (None, Some(reference)) => {
                 required_text(&reference["reference"]).is_some()
                     || identifier(&reference["identifier"]).is_some()
@@ -791,7 +1136,7 @@ fn previous_claim<'a>(bundle: &Bundle<'a>, claim: Entry<'a>) -> Result<Option<En
     };
     let related = required_list(&claim.resource["related"], "Claim.related")?;
     if related.len() != 1
-        || !concept(&related[0]["relationship"])
+        || !open_concept(&related[0]["relationship"])
         || bundle.target(claim, &related[0]["claim"], "Claim")?.url != previous.url
     {
         return Err(Error::ClaimCorrelation);
@@ -835,7 +1180,7 @@ pub enum Action {
 fn action(item: &Value) -> Result<(Action, &Value), Error> {
     let mut review = None;
     for entry in required_list(&item["adjudication"], "ClaimResponse adjudication")? {
-        if !concept(&entry["category"]) {
+        if !open_concept(&entry["category"]) {
             return Err(Error::Profile("ClaimResponse.adjudication.category"));
         }
         if let Some(extension) = extension(entry, PAS, "extension-reviewAction")? {
@@ -947,6 +1292,50 @@ impl Response {
 pub struct ResponseContext<'a> {
     /// Item sequences for which the payer requested more information. A4 alone can mean ordinary pending.
     pub additional_information_requested: &'a [u32],
+    /// Membership in X12 external code list 886 (Health Care Services Decision Reason Codes), from
+    /// the operator's licensed copy. PAS 2.2.1 binds every review action `reasonCode` to that list
+    /// (required), but does not publish its codes. Without this, a response carrying such a code
+    /// fails with [`Error::TerminologyUnavailable`] rather than passing unchecked.
+    pub decision_reason_codes: Option<&'a dyn Fn(&str) -> bool>,
+}
+
+/// Check every review action `reasonCode` in a ClaimResponse against its required binding,
+/// X12278ReviewDecisionReasonCode (PAS 2.2.1). A coding from any other system, or a concept
+/// without one from the list, is not a member.
+fn review_reasons(value: &Value, terminology: Option<&dyn Fn(&str) -> bool>) -> Result<(), Error> {
+    match value {
+        Value::Array(values) => values
+            .iter()
+            .try_for_each(|value| review_reasons(value, terminology)),
+        Value::Object(object) => {
+            if object.get("url").and_then(Value::as_str)
+                == Some(&format!("{PAS}extension-reviewAction"))
+            {
+                for reason in list(&value["extension"])
+                    .iter()
+                    .filter(|entry| entry["url"] == "reasonCode")
+                {
+                    let reason = &reason["valueCodeableConcept"];
+                    let mut members = codings(reason)
+                        .filter(|(system, _)| *system == REVIEW_REASON_SYSTEM)
+                        .peekable();
+                    if !concept(reason) || members.peek().is_none() {
+                        return Err(Error::Profile("extension-reviewAction.reasonCode"));
+                    }
+                    let check = terminology.ok_or(Error::TerminologyUnavailable(
+                        "X12278ReviewDecisionReasonCode",
+                    ))?;
+                    if !members.all(|(_, code)| check(code)) {
+                        return Err(Error::Profile("extension-reviewAction.reasonCode"));
+                    }
+                }
+            }
+            object
+                .values()
+                .try_for_each(|value| review_reasons(value, terminology))
+        }
+        _ => Ok(()),
+    }
 }
 
 pub fn validate_response(
@@ -987,6 +1376,7 @@ pub fn validate_response(
     for resource in &bundle.entries {
         bundle.references(*resource, Some(&response["request"]), false)?;
     }
+    review_reasons(response, context.decision_reason_codes)?;
     let human_reviewed = extension(response, PAS, "extension-claimResponseReviewer")?
         .map(|reviewer| {
             extension(reviewer, "", "wasHumanReviewedFlag")?
@@ -1036,10 +1426,11 @@ pub fn validate_response(
         if result == Action::Approved {
             approval_number(response, review)?;
         }
+        // Every reasonCode present has already been checked against its value set.
         if result == Action::Denied
-            && !list(&review["extension"]).iter().any(|reason| {
-                reason["url"] == "reasonCode" && concept(&reason["valueCodeableConcept"])
-            })
+            && !list(&review["extension"])
+                .iter()
+                .any(|reason| reason["url"] == "reasonCode")
             && !denial_note(item, response)
         {
             return Err(Error::DenialReason);
@@ -1181,6 +1572,7 @@ fn validate_information_requests(
 
 pub fn validate_subscription(value: &Value, sending_systems: &[&str]) -> Result<(), Error> {
     profile(value, "Subscription", "profile-subscription")?;
+    structure(value)?;
     let channel = &value["channel"];
     let content = extension(&channel["_payload"], BACKPORT, "backport-payload-content")?;
     if !matches!(
@@ -1250,6 +1642,8 @@ pub fn validate_notification(
     {
         return Err(Error::Notification);
     }
+    // Before any early return: handshakes and heartbeats get the same structural checks.
+    structure(value)?;
     let entries = required_list(&value["entry"], "Notification entries")?;
     let status = &entries[0]["resource"];
     if status["resourceType"] != "Parameters"

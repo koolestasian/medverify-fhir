@@ -1,4 +1,4 @@
-use crate::{extract, output};
+use crate::{extract, output, state};
 use medverify_core::{claim::ProcedureCode, wiser as core};
 use pyo3::{exceptions::PyValueError, prelude::*};
 use serde::{Deserialize, Serialize};
@@ -98,7 +98,7 @@ impl Service {
             .collect::<PyResult<Vec<_>>>()?;
         Ok(policy.route(
             &core::Service {
-                state: &self.state,
+                state: state(&self.state)?,
                 plan: self.plan,
                 site: self.site,
                 date: date(&self.date)?,

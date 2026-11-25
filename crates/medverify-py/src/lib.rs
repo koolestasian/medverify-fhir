@@ -36,6 +36,28 @@ fn decode<T: DeserializeOwned>(text: &str, input: &str) -> PyResult<T> {
     })
 }
 
+/// Parse a FHIR JSON document, rejecting repeated property names that a plain parse would merge.
+fn decode_document(text: &str) -> PyResult<serde_json::Value> {
+    medverify_core::fhir_pas::parse_json(text).map_err(|error| {
+        PyValueError::new_err(format!(
+            "invalid FHIR JSON at line {}, column {}{}",
+            error.line(),
+            error.column(),
+            if error.is_data() {
+                ": duplicate property"
+            } else {
+                ""
+            }
+        ))
+    })
+}
+
+fn state(value: &str) -> PyResult<medverify_core::state::State> {
+    value.parse().map_err(|_| {
+        PyValueError::new_err("state must be an uppercase USPS state or territory code")
+    })
+}
+
 fn extract<T: DeserializeOwned>(value: &Bound<'_, PyAny>, input: &str) -> PyResult<T> {
     let text: String = value
         .py()

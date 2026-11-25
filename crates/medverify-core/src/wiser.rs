@@ -1,4 +1,5 @@
 use crate::claim::ProcedureCode;
+pub use crate::state::State;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -296,7 +297,7 @@ impl Policy {
     }
 
     pub fn route(&self, service: &Service<'_>, stage: Stage) -> Route {
-        if service.state != "WA"
+        if service.state != State::WA
             || service.plan != Plan::OriginalMedicare
             || service.emergency
             || service.inpatient_only
@@ -449,7 +450,7 @@ pub struct Exemption<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Service<'a> {
-    pub state: &'a str,
+    pub state: State,
     pub plan: Plan,
     pub site: Site,
     pub date: Date,

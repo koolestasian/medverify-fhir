@@ -418,3 +418,619 @@ assert gil_enabled() == before
         ],
         check=True,
     )
+
+
+def test_pas_expedited_request_cannot_be_assessed_on_the_standard_clock():
+    bundle = json.loads((FIXTURES / "request.json").read_text(encoding="utf-8"))
+    bundle["entry"][0]["resource"]["priority"]["coding"][0]["code"] = "stat"
+    request = fhir_pas.validate_request(json.dumps(bundle))
+    assert request.priority == "expedited"
+    classifications = [
+        ("https://example.test/synthetic-procedures", "Y9010", "medical")
+    ]
+    day_four = {"action": "approved", "at": "2026-07-10T09:00:00-07:00"}
+
+    def timeline(priority):
+        return fhir_pas.Timeline(
+            {
+                "payer": {"plan": "medicare_advantage"},
+                "received": "2026-07-06T09:00:00-07:00[America/Los_Angeles]",
+                "priority": priority,
+                "checked_at": "2026-12-01T00:00:00Z",
+            }
+        )
+
+    with pytest.raises(ValueError, match="^PriorityDowngrade$"):
+        timeline("standard").assess_item(
+            request, 1, classifications=classifications, event=day_four
+        )
+    assert timeline("expedited").assess_item(
+        request, 1, classifications=classifications, event=day_four
+    ) == {"late": {"deadline": "2026-07-09T16:00:00Z"}}
+
+
+@pytest.mark.parametrize("state", ["tx", "TX ", " TX", "", "ZZ"])
+def test_policy_state_codes_must_be_exact(state):
+    reviewer_context = {
+        "state": "TX",
+        "plan": "state_regulated_commercial",
+        "on": "2026-07-01",
+        "issued_or_renewed": "2026-01-01",
+        "decision": "denial",
+        "basis": "medical_necessity",
+        "specialty": "medical",
+    }
+    policy = fhir_pas.ReviewerPolicy.state_rules()
+    assert len(policy.applicable_rules(reviewer_context)) == 2
+    with pytest.raises(ValueError, match="UnqualifiedReviewer"):
+        policy.verify(reviewer_context, "none_or_administrative_support")
+    bad = reviewer_context | {"state": state}
+    with pytest.raises(ValueError, match="USPS state or territory code"):
+        policy.applicable_rules(bad)
+    with pytest.raises(ValueError, match="USPS state or territory code"):
+        policy.verify(bad, "none_or_administrative_support")
+
+    service = {
+        "state": state,
+        "plan": "original_medicare",
+        "site": "office",
+        "date": "2026-07-06",
+        "code": "Y9010",
+    }
+    with pytest.raises(ValueError, match="USPS state or territory code"):
+        wiser.Policy.washington_synthetic().route(service, {"claim": None})
+
+
+def test_pas_documents_reject_repeated_property_names():
+    submission = (FIXTURES / "request.json").read_text(encoding="utf-8")
+    request = fhir_pas.validate_request(submission)
+    document = (FIXTURES / "response.json").read_text(encoding="utf-8")
+    repeated = document.replace(
+        '"itemSequence": 5,', '"itemSequence": 1, "itemSequence": 5,', 1
+    )
+    assert repeated != document
+    with pytest.raises(
+        ValueError,
+        match=r"invalid FHIR JSON at line \d+, column \d+: duplicate property$",
+    ):
+        fhir_pas.validate_response(repeated, request)
+    with pytest.raises(ValueError, match="duplicate property"):
+        fhir_pas.validate_request(
+            submission.replace(
+                '"resourceType"', '"id": "x", "id": "y", "resourceType"', 1
+            )
+        )
+    with pytest.raises(ValueError, match="duplicate property"):
+        fhir_pas.validate_subscription(
+            '{"status": "requested", "status": "active"}', []
+        )
+    with pytest.raises(ValueError, match="duplicate property"):
+        fhir_pas.validate_notification(
+            '{"type": "history", "type": "history"}', "Subscription/x"
+        )
+    with pytest.raises(ValueError, match=r"invalid FHIR JSON at line 1, column 1$"):
+        fhir_pas.validate_request("{")
+
+
+@pytest.mark.parametrize("codes", [("normal", "stat"), ("stat", "normal")])
+def test_pas_conflicting_priority_codes_are_rejected_in_any_order(codes):
+    bundle = json.loads((FIXTURES / "request.json").read_text(encoding="utf-8"))
+    claim = bundle["entry"][0]["resource"]
+    system = claim["priority"]["coding"][0]["system"]
+    claim["priority"]["coding"] = [{"system": system, "code": code} for code in codes]
+    with pytest.raises(ValueError, match="Claim.priority"):
+        fhir_pas.validate_request(json.dumps(bundle))
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("stat", "expedited"),
+        ("normal", "standard"),
+        ("deferred", "standard"),
+        ("urgent", None),
+        ("asap", None),
+    ],
+)
+def test_pas_priority_accepts_exactly_the_r4_process_priority_codes(code, expected):
+    bundle = json.loads((FIXTURES / "request.json").read_text(encoding="utf-8"))
+    bundle["entry"][0]["resource"]["priority"]["coding"][0]["code"] = code
+    if expected is None:
+        with pytest.raises(ValueError, match="Claim.priority"):
+            fhir_pas.validate_request(json.dumps(bundle))
+    else:
+        assert fhir_pas.validate_request(json.dumps(bundle)).priority == expected
+
+
+_PROCESS_PRIORITY = "http://terminology.hl7.org/CodeSystem/processpriority"
+_JEOPARDY = {
+    "text": "Physician: waiting seven days could seriously jeopardize the enrollee's health"
+}
+
+
+def _priority_request(priority, level=None):
+    bundle = json.loads((FIXTURES / "request.json").read_text(encoding="utf-8"))
+    claim = bundle["entry"][0]["resource"]
+    claim["priority"] = priority
+    if level is not None:
+        claim["extension"] = [
+            {
+                "url": "http://hl7.org/fhir/us/davinci-pas/StructureDefinition/"
+                "extension-levelOfServiceCode",
+                "valueCodeableConcept": {
+                    "coding": [
+                        {
+                            "system": "https://codesystem.x12.org/005010/1338",
+                            "code": level,
+                        }
+                    ]
+                },
+            }
+        ]
+    return json.dumps(bundle)
+
+
+def _medicare_advantage(priority):
+    return fhir_pas.Timeline(
+        {
+            "payer": {"plan": "medicare_advantage"},
+            "received": "2026-07-06T09:00:00-07:00[America/Los_Angeles]",
+            "priority": priority,
+            "checked_at": "2026-12-01T00:00:00Z",
+        }
+    )
+
+
+_CLASSIFIED = [("https://example.test/synthetic-procedures", "Y9010", "medical")]
+_DAY_FOUR = {"action": "approved", "at": "2026-07-10T09:00:00-07:00"}
+
+
+@pytest.mark.parametrize(
+    ("priority", "level", "expected"),
+    [
+        (
+            {"coding": [{"system": "https://example.test/local", "code": "routine"}]},
+            None,
+            "undetermined",
+        ),
+        ({"coding": [{"code": "routine"}]}, None, "undetermined"),
+        (_JEOPARDY, None, "undetermined"),
+        (_JEOPARDY, "E", "undetermined"),
+        (_JEOPARDY, "U", "expedited"),
+        ({"coding": [{"code": "routine"}]}, "U", "expedited"),
+        (
+            {"coding": [{"system": _PROCESS_PRIORITY, "code": "normal"}]},
+            "U",
+            "expedited",
+        ),
+        (
+            {"coding": [{"system": _PROCESS_PRIORITY, "code": "normal"}]},
+            "E",
+            "standard",
+        ),
+        (
+            {"coding": [{"system": _PROCESS_PRIORITY, "code": "normal"}]},
+            "03",
+            "emergency",
+        ),
+        (_JEOPARDY, "03", "emergency"),
+    ],
+)
+def test_pas_request_priority_resolution(priority, level, expected):
+    request = fhir_pas.validate_request(_priority_request(priority, level))
+    assert request.priority == expected
+
+
+@pytest.mark.parametrize(
+    ("priority", "level", "refusal"),
+    [
+        (_JEOPARDY, None, "PriorityUndetermined"),
+        ({"coding": [{"code": "routine"}]}, None, "PriorityUndetermined"),
+        (
+            {"coding": [{"system": _PROCESS_PRIORITY, "code": "normal"}]},
+            "03",
+            "EmergencyLevelOfService",
+        ),
+    ],
+)
+def test_pas_unresolved_priority_gets_no_timing_verdict_until_determined(
+    priority, level, refusal
+):
+    request = fhir_pas.validate_request(_priority_request(priority, level))
+    for clock in ("standard", "expedited"):
+        with pytest.raises(ValueError, match=f"^{refusal}$"):
+            _medicare_advantage(clock).assess_item(
+                request, 1, classifications=_CLASSIFIED, event=_DAY_FOUR
+            )
+    with pytest.raises(ValueError, match="^PriorityDowngrade$"):
+        _medicare_advantage("standard").assess_item(
+            request,
+            1,
+            classifications=_CLASSIFIED,
+            event=_DAY_FOUR,
+            determined_priority="expedited",
+        )
+    assert _medicare_advantage("expedited").assess_item(
+        request,
+        1,
+        classifications=_CLASSIFIED,
+        event=_DAY_FOUR,
+        determined_priority="expedited",
+    ) == {"late": {"deadline": "2026-07-09T16:00:00Z"}}
+    assert _medicare_advantage("standard").assess_item(
+        request,
+        1,
+        classifications=_CLASSIFIED,
+        event=_DAY_FOUR,
+        determined_priority="standard",
+    ) == {"on_time": {"deadline": "2026-07-13T16:00:00Z"}}
+    with pytest.raises(ValueError, match="PAS determined priority"):
+        _medicare_advantage("standard").assess_item(
+            request, 1, classifications=_CLASSIFIED, determined_priority="urgent"
+        )
+
+
+def test_pas_coded_stat_beside_the_emergency_level_cannot_be_determined_standard():
+    request = fhir_pas.validate_request(
+        _priority_request(
+            {"coding": [{"system": _PROCESS_PRIORITY, "code": "stat"}]}, "03"
+        )
+    )
+    assert request.priority == "emergency"
+    with pytest.raises(ValueError, match="^PriorityDowngrade$"):
+        _medicare_advantage("standard").assess_item(
+            request,
+            1,
+            classifications=_CLASSIFIED,
+            event=_DAY_FOUR,
+            determined_priority="standard",
+        )
+    assert _medicare_advantage("expedited").assess_item(
+        request,
+        1,
+        classifications=_CLASSIFIED,
+        event=_DAY_FOUR,
+        determined_priority="expedited",
+    ) == {"late": {"deadline": "2026-07-09T16:00:00Z"}}
+
+
+def test_pas_coded_priority_cannot_be_replaced_by_a_determination():
+    request = fhir_pas.validate_request(
+        _priority_request({"coding": [{"system": _PROCESS_PRIORITY, "code": "stat"}]})
+    )
+    with pytest.raises(ValueError, match="^PriorityAlreadyCoded$"):
+        _medicare_advantage("standard").assess_item(
+            request,
+            1,
+            classifications=_CLASSIFIED,
+            event=_DAY_FOUR,
+            determined_priority="standard",
+        )
+
+
+def test_pas_malformed_priority_coding_is_rejected_not_ignored():
+    stat = {"system": _PROCESS_PRIORITY, "code": "stat"}
+    with pytest.raises(ValueError, match=r"^Profile\(\"CodeableConcept.coding\"\)$"):
+        fhir_pas.validate_request(
+            _priority_request({"text": "Immediate", "coding": stat})
+        )
+    request = fhir_pas.validate_request(
+        _priority_request({"text": "Immediate", "coding": [stat]})
+    )
+    assert request.priority == "expedited"
+
+
+def test_pas_priority_guard_keeps_drug_and_payer_exclusions():
+    bundle = json.loads((FIXTURES / "request.json").read_text(encoding="utf-8"))
+    bundle["entry"][0]["resource"]["priority"]["coding"][0]["code"] = "stat"
+    request = fhir_pas.validate_request(json.dumps(bundle))
+    classifications = [
+        ("https://example.test/synthetic-procedures", "Y9010", "medical")
+    ]
+    day_four = {"action": "approved", "at": "2026-07-10T09:00:00-07:00"}
+
+    def standard(plan):
+        return fhir_pas.Timeline(
+            {
+                "payer": {"plan": plan},
+                "received": "2026-07-06T09:00:00-07:00[America/Los_Angeles]",
+                "priority": "standard",
+                "checked_at": "2026-12-01T00:00:00Z",
+            }
+        )
+
+    assert standard("medicare_advantage").assess_item(
+        request, 5, classifications=classifications, event=day_four
+    ) == {"outside_scope": "drug_excluded"}
+    assert standard("original_medicare").assess_item(
+        request, 1, classifications=classifications, event=day_four
+    ) == {"outside_scope": "payer_excluded"}
+    with pytest.raises(ValueError, match="^PriorityDowngrade$"):
+        standard("medicare_advantage").assess_item(
+            request, 1, classifications=classifications, event=day_four
+        )
+
+
+_X12_REASONS = "https://codesystem.x12.org/external/886"
+_STATEMENT = (
+    "Treating physician: applying the standard timeframe could seriously "
+    "jeopardize the enrollee's health"
+)
+
+
+def _denied_response(reason=None, note=False):
+    document = json.loads((FIXTURES / "response.json").read_text(encoding="utf-8"))
+    claim_response = document["entry"][0]["resource"]
+    review = claim_response["item"][1]["adjudication"][0]["extension"][0]
+    review["extension"][0]["valueCodeableConcept"]["coding"][0]["code"] = "A3"
+    review["extension"] = [e for e in review["extension"] if e["url"] != "number"]
+    if reason is not None:
+        review["extension"].append(
+            {"url": "reasonCode", "valueCodeableConcept": reason}
+        )
+    if note:
+        claim_response["item"][1]["noteNumber"] = [7]
+        claim_response["processNote"] = [
+            {"number": 7, "text": "The request lacks the baseline assessment."}
+        ]
+    return json.dumps(document)
+
+
+def test_pas_denial_reason_must_come_from_the_required_x12_value_set():
+    request = fhir_pas.validate_request(
+        (FIXTURES / "request.json").read_text(encoding="utf-8")
+    )
+    invented = {
+        "coding": [
+            {"system": "https://example.test/denial-reason", "code": "baseline-missing"}
+        ]
+    }
+    for codes in (None, {"0U"}):
+        with pytest.raises(
+            ValueError, match=r'^Profile\("extension-reviewAction.reasonCode"\)$'
+        ):
+            fhir_pas.validate_response(
+                _denied_response(invented), request, decision_reason_codes=codes
+            )
+        # An invented reason is not rescued by a valid line-linked note.
+        with pytest.raises(ValueError, match="extension-reviewAction.reasonCode"):
+            fhir_pas.validate_response(
+                _denied_response(invented, note=True),
+                request,
+                decision_reason_codes=codes,
+            )
+    # The line-linked denial note remains a valid reason on its own.
+    noted = fhir_pas.validate_response(_denied_response(note=True), request)
+    assert noted.action(1) == "denied"
+    with pytest.raises(ValueError, match="^DenialReason$"):
+        fhir_pas.validate_response(_denied_response(), request)
+
+    x12 = {"coding": [{"system": _X12_REASONS, "code": "0U"}]}
+    # Membership needs the operator's licensed code list: no verdict without it.
+    with pytest.raises(
+        ValueError,
+        match=r'^TerminologyUnavailable\("X12278ReviewDecisionReasonCode"\)$',
+    ):
+        fhir_pas.validate_response(_denied_response(x12), request)
+    for codes in ({"0U"}, frozenset({"0U", "0V"})):
+        response = fhir_pas.validate_response(
+            _denied_response(x12), request, decision_reason_codes=codes
+        )
+        assert response.action(1) == "denied"
+    with pytest.raises(ValueError, match="extension-reviewAction.reasonCode"):
+        fhir_pas.validate_response(
+            _denied_response(x12), request, decision_reason_codes=set()
+        )
+
+
+def _statement_request(where):
+    bundle = json.loads((FIXTURES / "request.json").read_text(encoding="utf-8"))
+    claim = bundle["entry"][0]["resource"]
+    if where == "priority":
+        claim["priority"]["text"] = _STATEMENT
+    elif where == "supporting_info":
+        claim["supportingInfo"] = [
+            {
+                "sequence": 1,
+                "category": {
+                    "coding": [
+                        {
+                            "system": "http://hl7.org/fhir/us/davinci-pas/CodeSystem/PASTempCodes",
+                            "code": "freeFormMessage",
+                        }
+                    ]
+                },
+                "valueString": _STATEMENT,
+            }
+        ]
+    return fhir_pas.validate_request(json.dumps(bundle))
+
+
+@pytest.mark.parametrize("where", ["priority", "supporting_info"])
+def test_pas_physician_statement_beside_normal_is_not_on_time_on_the_standard_clock(
+    where,
+):
+    request = _statement_request(where)
+    assert request.priority == "undetermined"
+    for clock in ("standard", "expedited"):
+        with pytest.raises(ValueError, match="^PriorityUndetermined$"):
+            _medicare_advantage(clock).assess_item(
+                request, 1, classifications=_CLASSIFIED, event=_DAY_FOUR
+            )
+    assert _medicare_advantage("expedited").assess_item(
+        request,
+        1,
+        classifications=_CLASSIFIED,
+        event=_DAY_FOUR,
+        determined_priority="expedited",
+    ) == {"late": {"deadline": "2026-07-09T16:00:00Z"}}
+    with pytest.raises(ValueError, match="^PriorityDowngrade$"):
+        _medicare_advantage("standard").assess_item(
+            request,
+            1,
+            classifications=_CLASSIFIED,
+            event=_DAY_FOUR,
+            determined_priority="expedited",
+        )
+
+
+def test_pas_ordinary_standard_and_coded_expedited_requests_keep_their_clocks():
+    ordinary = _statement_request(None)
+    assert ordinary.priority == "standard"
+    assert _medicare_advantage("standard").assess_item(
+        ordinary, 1, classifications=_CLASSIFIED, event=_DAY_FOUR
+    ) == {"on_time": {"deadline": "2026-07-13T16:00:00Z"}}
+    stat = fhir_pas.validate_request(
+        _priority_request(
+            {
+                "coding": [{"system": _PROCESS_PRIORITY, "code": "stat"}],
+                "text": "Routine",
+            }
+        )
+    )
+    assert stat.priority == "expedited"
+    with pytest.raises(ValueError, match="^PriorityDowngrade$"):
+        _medicare_advantage("standard").assess_item(
+            stat, 1, classifications=_CLASSIFIED, event=_DAY_FOUR
+        )
+
+
+@pytest.mark.parametrize(
+    ("concept", "accepted"),
+    [
+        ({"extension": []}, False),
+        ({"extension": [{"url": "https://example.test/ext"}]}, False),
+        ({"id": "only-an-id"}, False),
+        ({"unknown": "content"}, False),
+        ({"coding": [{"code": "0016070"}]}, True),
+        ({"text": "Lumbar fusion"}, True),
+        (
+            {"extension": [{"url": "https://example.test/ext", "valueString": "x"}]},
+            True,
+        ),
+    ],
+)
+def test_pas_procedure_concept_needs_r4_content(concept, accepted):
+    bundle = json.loads((FIXTURES / "request.json").read_text(encoding="utf-8"))
+    bundle["entry"][0]["resource"]["procedure"] = [
+        {"sequence": 1, "procedureCodeableConcept": concept}
+    ]
+    if accepted:
+        assert fhir_pas.validate_request(json.dumps(bundle)).sequences == [1, 5]
+    else:
+        with pytest.raises(
+            ValueError, match=r'^Missing\("Claim.procedure.procedure\[x\]"\)$'
+        ):
+            fhir_pas.validate_request(json.dumps(bundle))
+
+
+@pytest.mark.parametrize("determined", [None, "standard", "expedited"])
+def test_pas_exclusions_take_precedence_over_a_priority_determination(determined):
+    request = fhir_pas.validate_request(
+        (FIXTURES / "request.json").read_text(encoding="utf-8")
+    )
+    assert request.priority == "standard"
+    early = fhir_pas.Timeline(
+        {
+            "payer": {"plan": "medicare_advantage"},
+            "received": "2025-12-30T09:00:00-08:00[America/Los_Angeles]",
+            "priority": "standard",
+            "checked_at": "2026-12-01T00:00:00Z",
+        }
+    )
+    original = fhir_pas.Timeline(
+        {
+            "payer": {"plan": "original_medicare"},
+            "received": "2026-07-06T09:00:00-07:00[America/Los_Angeles]",
+            "priority": "standard",
+            "checked_at": "2026-12-01T00:00:00Z",
+        }
+    )
+    for clock in ("standard", "expedited"):
+        assert _medicare_advantage(clock).assess_item(
+            request,
+            5,
+            classifications=_CLASSIFIED,
+            event=_DAY_FOUR,
+            determined_priority=determined,
+        ) == {"outside_scope": "drug_excluded"}
+    assert original.assess_item(
+        request,
+        1,
+        classifications=_CLASSIFIED,
+        event=_DAY_FOUR,
+        determined_priority=determined,
+    ) == {"outside_scope": "payer_excluded"}
+    assert early.assess_item(
+        request, 1, classifications=_CLASSIFIED, determined_priority=determined
+    ) == {"outside_scope": "before_effective_date"}
+    # In scope, the coded priority is still protected.
+    if determined is not None:
+        with pytest.raises(ValueError, match="^PriorityAlreadyCoded$"):
+            _medicare_advantage("expedited").assess_item(
+                request,
+                1,
+                classifications=_CLASSIFIED,
+                event=_DAY_FOUR,
+                determined_priority=determined,
+            )
+
+
+def test_pas_response_and_notification_get_the_request_structure_checks():
+    request = fhir_pas.validate_request(
+        (FIXTURES / "request.json").read_text(encoding="utf-8")
+    )
+    document = json.loads((FIXTURES / "response.json").read_text(encoding="utf-8"))
+    assert fhir_pas.validate_response(json.dumps(document), request).action(1) == (
+        "approved"
+    )
+    document["entry"][0]["resource"]["extension"] = [
+        {
+            "url": PAS + "extension-levelOfServiceCode",
+            "valueCodeableConcept": {
+                "coding": [
+                    {"system": "https://codesystem.x12.org/005010/1338", "code": "U"}
+                ]
+            },
+        }
+    ]
+    with pytest.raises(
+        ValueError, match=r'^Profile\("extension-levelOfServiceCode"\)$'
+    ):
+        fhir_pas.validate_response(json.dumps(document), request)
+
+    error = {
+        "system": "http://terminology.hl7.org/CodeSystem/subscription-error",
+        "code": "timeout",
+    }
+    for kind in ("heartbeat", "handshake"):
+        heartbeat = {
+            "resourceType": "Bundle",
+            "type": "history",
+            "timestamp": "2026-07-06T09:07:00-07:00",
+            "entry": [
+                {
+                    "fullUrl": "https://example.test/fhir/Parameters/status",
+                    "resource": {
+                        "resourceType": "Parameters",
+                        "parameter": [
+                            {"name": "topic", "valueCanonical": TOPIC},
+                            {
+                                "name": "subscription",
+                                "valueReference": {"reference": "Subscription/notify"},
+                            },
+                            {"name": "type", "valueCode": kind},
+                            {
+                                "name": "error",
+                                "valueCodeableConcept": {"coding": [error]},
+                            },
+                        ],
+                    },
+                }
+            ],
+        }
+        fhir_pas.validate_notification(json.dumps(heartbeat), "Subscription/notify")
+        status = heartbeat["entry"][0]["resource"]
+        status["parameter"][3]["valueCodeableConcept"]["coding"] = error
+        with pytest.raises(ValueError, match=r'^Profile\("CodeableConcept.coding"\)$'):
+            fhir_pas.validate_notification(json.dumps(heartbeat), "Subscription/notify")
