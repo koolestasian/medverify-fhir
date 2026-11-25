@@ -8,16 +8,19 @@ MedVerify-FHIR checks Medicare coding edits, Washington WISeR policy, and Da Vin
 
 ## Quickstart
 
-After installing the wheel, run `medverify demo` from any directory. It runs four synthetic checks offline, verifies a repaired control for each, and prints the measured check times.
+After installing the wheel, run `medverify demo` from any directory. The demo runs four synthetic checks offline, verifies a repaired control for each, and prints measured check times. From a checkout, run it with `python -m uv run --locked medverify demo`.
 
 From the repository root, use stable Rust with a native linker, CPython 3.11 or later, and uv installed as a Python module. Run these commands in Bash, or Git Bash on Windows, to build the synthetic indexes and check one line against its unit limit.
 
 ```sh
-cargo run --locked -p medverify-core --bin medverify-index -- synthetic --data data --out target/synthetic
-python -m uv run --locked python - <<'PY'
+work=$(mktemp -d)
+cargo run --locked -p medverify-core --bin medverify-index -- synthetic --data data --out "$work/index"
+python -m uv run --locked python - "$work/index" <<'PY'
+import sys
+
 from medverify import ClaimLine, MedVerifyEngine
 
-engine = MedVerifyEngine("target/synthetic")
+engine = MedVerifyEngine(sys.argv[1])
 line = ClaimLine(
     id=1, beneficiary="patient-a", billing_provider="provider-a",
     date="2026-10-01", setting="practitioner", code="Y9011", units=4,
@@ -37,9 +40,21 @@ Rust callers can open the generated files with `MmapPtpIndex::open` and `MmapMue
 
 ## Python policy API
 
-`medverify.wiser.Policy.washington_synthetic()` loads the bundled Washington policy. Use `Policy.from_toml(text)` with authorized procedure mappings. Pass typed service and stage dictionaries to `policy.route`. The same policy exposes gold-card thresholds, eligibility, and associated denials. The module also provides `evaluate_esi`, `evaluate_fusion`, and `validate_utn`.
+### Washington WISeR
 
-`medverify.fhir_pas.validate_request(document)` takes FHIR R4 JSON text and returns an owned request handle. Pass that handle to `validate_response(document, request)` to correlate a response. A validation failure raises `ValueError` with its PAS validation code. Documents that repeat a property name in any object are rejected, as FHIR R4 JSON requires. Use `Timeline` for receipt and notice deadlines and `ReviewerPolicy.state_rules()` for state reviewer requirements. Give `Timeline` a zoned receipt such as `2026-03-06T09:00:00-08:00[America/Los_Angeles]` so it can apply local calendar deadlines across DST changes. A request's `priority` is read only from structured codes, and free text is never interpreted. HL7 process priority `stat`, or the X12 urgent level of service `U`, gives `expedited`, whatever accompanies it. The X12 emergency level of service `03` gives `emergency`. `normal` or `deferred` gives `standard` only when nothing else in the request speaks in a form the verifier does not read: text, extensions or another coding in `Claim.priority`, or text, a string, an attachment or a reference (such as a physician's report) in `Claim.supportingInfo`. Any of those, a local code, a code without a system, or text alone gives `undetermined`. A treating physician's statement that the standard timeframe could seriously jeopardize the enrollee's health requires an expedited decision (42 CFR 422.570(c)(2)(ii) for Medicare Advantage, with Medicaid and CHIP equivalents) whatever code the requester chose, so the verifier will not certify the standard clock while such content is unread. Process priority codes other than `stat`, `normal` and `deferred` are rejected, as are disagreeing codes in either order, a level of service outside `03`, `E` and `U` or anywhere but the Claim (including on a ClaimResponse or in a notification), and any `coding` that is not a non-empty array of Codings, in requests, responses, subscriptions and every notification including handshakes and heartbeats. A CodeableConcept needs R4 content: a coding, text or a non-empty, well-formed extension; `{"extension": []}`, an `id` alone or an unknown property is rejected. Elements with a required binding need a coded concept; text alone is rejected. For items within the deadline rule, `Timeline.assess_item` raises `PriorityDowngrade` when an expedited request is assessed against the standard clock. It raises `PriorityUndetermined` or `EmergencyLevelOfService` on either clock until the caller passes `determined_priority`: the caller's reading of an undetermined request after reviewing the content the verifier does not read, or of an emergency request once the caller has established that a prior-authorization clock applies. Urgency received outside the request is applied by assessing on the expedited clock, which a standard request always allows. A coded priority cannot be overridden (`PriorityAlreadyCoded`), and a coded `stat` beside the emergency level cannot be determined `standard` (`PriorityDowngrade`). Whether the deadline rule applies is decided before any determination, so drug, payer and effective-date exclusions (and unclassified services) are reported as `outside_scope` whatever `determined_priority` says. `Timeline.assess` takes no request, so it applies none of these request-priority checks. Every review action `reasonCode` in a response must come from X12 external code list 886, its required PAS 2.2.1 binding; another system, a code without one, or text is rejected. X12 licenses that list and PAS does not publish its codes, so pass your licensed copy as `validate_response(..., decision_reason_codes={...})`. Without it a response carrying a reason code raises `TerminologyUnavailable("X12278ReviewDecisionReasonCode")` rather than passing unchecked. A denied item needs such a reason or a line-linked `processNote`. State fields in reviewer contexts and WISeR services must be exact uppercase USPS codes such as `TX`; anything else raises `ValueError` instead of matching no rules.
+`medverify.wiser.Policy.washington_synthetic()` loads the bundled policy with synthetic procedure mappings. To supply authorized mappings, use `Policy.from_toml(text)`. The policy exposes service routing, gold-card eligibility, and associated denials. The module also provides `evaluate_esi`, `evaluate_fusion`, and `validate_utn`.
+
+### Da Vinci Prior Authorization Support
+
+Pass FHIR R4 JSON text to `medverify.fhir_pas.validate_request(document)`. It returns an owned request handle that `validate_response(document, request)` uses to correlate the response. The module also validates subscriptions, notifications, and inquiry modes. Validation errors raise `ValueError` with a validator error code.
+
+For review-action reason codes, supply the allowed codes from your licensed X12 external code list 886 as `decision_reason_codes` to `validate_response`. A response with a reason code raises `TerminologyUnavailable` if the list is missing. A denied item can satisfy the reason requirement with a valid line-linked `processNote`.
+
+Use `Timeline.assess_item` to assess a notice against a validated request item. Supply receipt time with a named time zone, such as `2026-03-06T09:00:00-08:00[America/Los_Angeles]`, so standard deadlines use the local calendar across daylight saving changes. Drug, payer, date, and service classification exclusions are evaluated first.
+
+Structured urgency establishes the minimum clock. HL7 `stat` or X12 `U` sets an expedited minimum. X12 level of service `03` reports `emergency`. A coded `normal` or `deferred` request can be `undetermined` when priority or supporting information includes narrative, documents, or other content the validator does not interpret. For an in-scope item, supply `determined_priority` after reviewing an undetermined request or establishing that a clock applies to an emergency request. `Timeline.assess` evaluates the configured clock directly without request context.
+
+`ReviewerPolicy.state_rules()` loads the bundled reviewer requirements. Use uppercase USPS codes in reviewer contexts and WISeR services.
 
 ## Licensed CMS tables
 
@@ -98,7 +113,7 @@ The seed loads 50 synthetic Washington patients from Synthea with fixed seeds an
 | PAS test-only control routes | `http://127.0.0.1:18085/admin/` | `MEDVERIFY_PAS_PORT` |
 | Inferno CRD, DTR and PAS APIs | `http://127.0.0.1:14567`, `14568` and `14569` | `MEDVERIFY_INFERNO_CRD_PORT`, `_DTR_PORT`, `_PAS_PORT` |
 
-Every port binds to 127.0.0.1. The PAS control routes exist only for unattended Inferno runs; the server refuses them through the proxy. To run a second, disposable stack beside an existing one, set `COMPOSE_PROJECT_NAME` and a different value for every port variable before running the commands above; seed and reset records are kept per project under `.cache/sandbox/`.
+Every port binds to 127.0.0.1. The PAS control routes support unattended Inferno runs. The server refuses control requests through the proxy. To run a second, disposable stack beside an existing one, set `COMPOSE_PROJECT_NAME` and a different value for every port variable before running the commands above; seed and reset records are kept per project under `.cache/sandbox/`.
 
 These suites exercise the sandbox payer servers. MedVerify's own PAS 2.2.1 validator is tested by `cargo test`. `bash scripts/check_sdist.sh` proves the source distribution builds and installs on its own.
 

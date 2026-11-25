@@ -1,19 +1,18 @@
 # Conformance
 
-Results of the official Inferno server test suites against the sandbox payer servers, written by
-`scripts/run_inferno.py` from an actual local run. The suites exercise the Nirmitee Go CRD, DTR and
-PAS servers built from the commits below; they do not exercise MedVerify's Rust PAS validator, which
-has its own gate in `cargo test` (crates/medverify-core/tests/pas.rs). The suites reach each server
-over TLS signed by a sandbox test CA. Passing Inferno is a conformance signal for these pinned
-builds, not a certification.
+The official Inferno suites exercised the pinned Da Vinci CRD, DTR, and PAS
+sandbox payer servers over TLS using the sandbox test CA. The Rust PAS
+validator has its own [test suite](../crates/medverify-core/tests/pas.rs).
 
-Overall verdict: **pass**. Run finished 20261125T044947Z (UTC). Detailed reports: `artifacts/inferno/20261125T042740Z/`.
+Overall verdict: **pass**. The run finished at 04:49:47 UTC on November 25, 2026.
+The tested commit and content digest below identify the checkout used for
+that run.
 
 A suite passes only when every test and group has a known verdict that is pass, omit (does not
 apply), or a skip of something the kit marks optional. A missing or unknown verdict, failure,
 error, cancellation, timeout, unresolved wait or required skip fails it.
 
-## Candidate
+## Tested tree
 
 | Item | Value |
 |---|---|
